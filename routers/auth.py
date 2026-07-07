@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from pydantic import BaseModel
 from uuid import uuid4
+from datetime import datetime, timezone
 from database import supabase, supabase_admin
 from utils.validacao import validar_senha_forte
 from utils.codigo_email import gerar_codigo_email, gerar_hash_codigo, codigo_expiracao_minutos
@@ -10,6 +12,10 @@ router = APIRouter(
     prefix='/auth',
     tags=['Auth']
 )
+
+class ConfirmaEmail(BaseModel):
+    email: str
+    codigo: str
 
 @router.post('/registro')    #remover o return de codigo hash em aplica??o real
 async def registro(
@@ -143,5 +149,71 @@ async def registro(
             status_code=500,
             detail=f"Erro interno ao cadastrar usu?rio: {str(erro)}"
         )
+
+
+@router.post('/confirmaEmail')      #implementar verifica??o de c?digo expirado
+def confirmaEmail(dados : ConfirmaEmail):
+    try:
+        email= dados.email.strip().lower()
+        codigo_hash=  gerar_hash_codigo(dados.codigo)
+        
+        resposta= (supabase_admin
+            .table('email_verificacoes')
+            .select('*')
+            .eq('email', email)
+            .eq('usado', False)
+            .order("criado_em", desc=True)
+            .limit(1)
+            .execute()
+        )
+        
+        if not resposta.data:
+            raise HTTPException(
+                status_code=404,
+                detail="C?digo n?o encontrado, j? utilizado ou e-mail diferente."
+            )
+        id_usuario = resposta.data[0]["user_id"]
+        
+        if codigo_hash != resposta.data[0]["codigo_hash"]:
+            raise HTTPException(
+                    status_code= 400,
+                    detail= 'C?digo inv?lido.'
+                )
+        
+        supabase_admin.table('email_verificacoes').update(
+            {
+                'usado' : True
+            }
+        ) \
+            .eq('email',  email) \
+            .eq('codigo_hash', codigo_hash)  \
+            .execute()
+        print(id_usuario)
+        
+        supabase_admin.table('perfis').update(
+            {
+                'situacao' : 'ativo',
+                'email_verificado' : True,
+                'email_verificado_em' : datetime.now(timezone.utc).isoformat()
+            }) \
+                .eq('id', id_usuario) \
+                .execute()
+        
+        supabase_admin.auth.admin.update_user_by_id(
+            id_usuario,
+            {'ban_duration': 'none'}
+        )
+
+        return {
+            'sucesso' : True,
+            'email' : email
+        }
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        erro_texto = str(erro).lower()
+        print(erro_texto)     #terminar de fazer o Exception
+    
 
 
