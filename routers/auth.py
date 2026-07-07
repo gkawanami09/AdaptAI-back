@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import uuid4
 from datetime import datetime, timezone
 from database import supabase, supabase_admin
@@ -13,11 +13,16 @@ router = APIRouter(
     tags=['Auth']
 )
 
+class LoginUsuario(BaseModel):
+    email: str
+    senha: str = Field(min_length=6)
+    
 class ConfirmaEmail(BaseModel):
     email: str
     codigo: str
 
-@router.post('/registro')    #remover o return de codigo hash em aplica??o real
+
+@router.post('/registro')    #remover o return de codigo hash em aplicação real
 async def registro(
     nome : str= Form(..., min_length= 2),
     email : str= Form(...),
@@ -40,7 +45,7 @@ async def registro(
         if senha != conf_senha:
             raise HTTPException(
                 status_code= 400,
-                detail='As senhas digitadas n?o coincidem'
+                detail='As senhas digitadas não coincidem'
             )
         auth_response = supabase.auth.sign_up({
             'email' : email,
@@ -52,7 +57,7 @@ async def registro(
         if not id_usuario:
             raise HTTPException(
                 status_code= 400,
-                detail= 'Erro, usu?rio n?o foi criado'
+                detail= 'Erro, usuário não foi criado'
             )
             
         supabase_admin.auth.admin.update_user_by_id(
@@ -69,7 +74,7 @@ async def registro(
             if avatar.content_type not in tipos_permitidos:
                 raise HTTPException(
                     status_code= 400,
-                    detail= 'Formato de imagem inv?lido. Use JPG, PNG ou WEBP'
+                    detail= 'Formato de imagem inválido. Use JPG, PNG ou WEBP'
                 )
             imagem= await avatar.read()
             tipo= avatar.filename.split('.')[-1]
@@ -115,7 +120,7 @@ async def registro(
     
         return {
             'sucesso' : True,
-            'mensagem' : 'Usu?rio cadastrado com sucesso!',
+            'mensagem' : 'Usuário cadastrado com sucesso!',
             'usuarios' : {
                 'id' : id_usuario,
                 'nome' : nome,
@@ -136,7 +141,7 @@ async def registro(
         if "user already registered" in erro_texto:
             raise HTTPException(
                 status_code=409,
-                detail="J? existe uma conta cadastrada com esse email."
+                detail="Já existe uma conta cadastrada com esse email."
             )
 
         if "email rate limit exceeded" in erro_texto:
@@ -147,11 +152,11 @@ async def registro(
             
         raise HTTPException(
             status_code=500,
-            detail=f"Erro interno ao cadastrar usu?rio: {str(erro)}"
+            detail=f"Erro interno ao cadastrar usuário: {str(erro)}"
         )
 
 
-@router.post('/confirmaEmail')      #implementar verifica??o de c?digo expirado
+@router.post('/confirmaEmail')      #implementar verificação de código expirado
 def confirmaEmail(dados : ConfirmaEmail):
     try:
         email= dados.email.strip().lower()
@@ -170,14 +175,14 @@ def confirmaEmail(dados : ConfirmaEmail):
         if not resposta.data:
             raise HTTPException(
                 status_code=404,
-                detail="C?digo n?o encontrado, j? utilizado ou e-mail diferente."
+                detail="Código não encontrado, já utilizado ou e-mail diferente."
             )
         id_usuario = resposta.data[0]["user_id"]
         
         if codigo_hash != resposta.data[0]["codigo_hash"]:
             raise HTTPException(
                     status_code= 400,
-                    detail= 'C?digo inv?lido.'
+                    detail= 'Código inválido.'
                 )
         
         supabase_admin.table('email_verificacoes').update(
@@ -216,4 +221,88 @@ def confirmaEmail(dados : ConfirmaEmail):
         print(erro_texto)     #terminar de fazer o Exception
     
 
+@router.post('/login')     #fazer bloqueio de usuário após 3 tentativas
+def login(dados : LoginUsuario):
+    email= dados.email.strip().lower()
+    senha= dados.senha
+    try:
+        resposta= supabase.auth.sign_in_with_password(
+            {
+                'email' : email,
+                'password' : senha
+            }
+        )
+        
+        if not resposta.user or not resposta.session:
+            raise HTTPException(
+                status_code= 401,
+                detail= 'Email ou senha inválidos.'
+            )
+        id_usuario = resposta.user.id
+        
+        resposta_perfil= supabase_admin.table('perfis').select(
+            'id, nome, escola_nome, avatar_url, situacao, email_verificado, tipo_usuario'
+        )  \
+        .eq('id', id_usuario)   \
+        .limit(1)  \
+        .execute()
+        
+        if not resposta_perfil.data:
+            raise HTTPException(
+                status_code= 400,
+                detail= 'Perfil do usuário não encontrado'
+            )
+            
+        perfil= resposta_perfil.data[0]
+        
+        if perfil['situacao'] in ('suspenso', 'inativo'):
+            raise HTTPException(
+                status_code= 403,
+                detail= 'Seu perfil está bloqueado, entre em contato pelo e-mail adapt2787@gmail.com'
+            )
+        
+        if perfil['situacao']== 'bloqueado' or not perfil['email_verificado']:
+            raise HTTPException(
+                status_code= 403,
+                detail= 'Verifique o seu perfil antes de entrar.'
+            )
+            
+        return {
+            'sucesso' : True,
+            'mensagem' : 'Login realizado com sucesso',
+            'usuario' : {
+                'id': perfil['id'],
+                'nome': perfil['nome'],
+                'escola_nome': perfil['escola_nome'],
+                'avatar_url': perfil['avatar_url'],
+                'tipo_usuario' : perfil['tipo_usuario']
+            },
+                "session": {
+                    "access_token": resposta.session.access_token,
+                    "refresh_token": resposta.session.refresh_token,
+                    "token_type": "bearer"
+                }
+        }
+        
+    except HTTPException:
+        raise
 
+    except Exception as erro:
+        erro_texto = str(erro).lower()
+
+        if "invalid login credentials" in erro_texto:
+            raise HTTPException(
+                status_code=401,
+                detail="Email ou senha inválidos."
+            )
+
+        if "banned" in erro_texto:
+            raise HTTPException(
+                status_code=403,
+                detail="Usuário bloqueado ou ainda não verificado."
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro interno ao fazer login: {str(erro)}"
+        )
