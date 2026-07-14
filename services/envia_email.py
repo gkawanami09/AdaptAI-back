@@ -14,7 +14,6 @@ def enviar_email_verificacao(destinatario: str, codigo: str, nome: str):
     mensagem["Subject"] = "Seu código de verificação do AdaptAI"
     mensagem["From"] = smtp_from
     mensagem["To"] = destinatario
-    print('email enviado!')
 
     mensagem.set_content(
         f"""
@@ -100,3 +99,4 @@ Se você não tentou criar uma conta, ignore este email.
         servidor.starttls()
         servidor.login(smtp_usuario, smtp_senha)
         servidor.send_message(mensagem)
+        print('email enviado!')
