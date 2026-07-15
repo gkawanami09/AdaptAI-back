@@ -1,42 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from database import supabase, supabase_admin
 from utils.validacao import validar_senha_forte
+from utils.autenticacao import pegar_usuario_atual
 from uuid import uuid4
 
 router = APIRouter(
     prefix="/usuarios",
     tags=["Usuários"]
 )
-
-validacao = HTTPBearer()
-
-
-
-def pegar_usuario_atual(
-    credentials: HTTPAuthorizationCredentials = Depends(validacao)
-):
-    token = credentials.credentials
-
-    try:
-        resposta = supabase.auth.get_user(token)
-
-        if not resposta.user:
-            raise HTTPException(
-                status_code=401,
-                detail="Token inválido ou expirado."
-            )
-
-        return resposta.user
-
-    except HTTPException:
-        raise
-
-    except Exception:
-        raise HTTPException(
-            status_code=401,
-            detail="Usuário não autenticado."
-        )
 
 
 @router.get("/perfil")
@@ -164,7 +135,7 @@ async def edicao(
         resposta = (
         supabase_admin
         .table("perfis")
-        .select("id, nome, escola_nome, avatar_url, situacao, email_verificado")
+        .select("id, nome, escola_nome, avatar_url, situacao, email_verificado, tipo_usuario")
         .eq("id", id_usuario)
         .limit(1)
         .execute()

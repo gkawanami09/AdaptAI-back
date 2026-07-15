@@ -1,25 +1,17 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel, Field
 from uuid import uuid4
 from datetime import datetime, timezone
 from database import supabase, supabase_admin
 from utils.validacao import validar_senha_forte
 from utils.codigo_email import gerar_codigo_email, gerar_hash_codigo, codigo_expiracao_minutos
 from services.envia_email import enviar_email_verificacao
+from schemas.auth_schema import LoginUsuario, ConfirmaEmail
 
 
 router = APIRouter(
     prefix='/auth',
     tags=['Auth']
 )
-
-class LoginUsuario(BaseModel):
-    email: str
-    senha: str = Field(min_length=6)
-    
-class ConfirmaEmail(BaseModel):
-    email: str
-    codigo: str
 
 
 @router.post('/registro')    #remover o return de codigo hash em aplicação real
