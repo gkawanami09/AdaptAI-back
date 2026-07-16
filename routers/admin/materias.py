@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from database import supabase_admin
 from uuid import UUID
 from utils.autenticacao import exigir_administrador
+from schemas.materia_schema import MateriaCriar, MateriaEditar
+from utils.textos import gerar_slug
 
 router = APIRouter(
     prefix='/admin/materias',
@@ -10,21 +12,70 @@ router = APIRouter(
 )
 
 @router.get('')
-def listar_materias():
+def listar_materias(
+    busca : str | None= None,
+    area : str | None= None,
+    ativo : bool | None= None,
+    pagina : int= Query(default= 1, ge= 1),
+    limite : int= Query(default= 6, ge= 1, le= 50)
+):
     try:
-        resposta= (supabase_admin.table('materias')
-                   .select('*')
+        inicio = (pagina - 1) * limite
+        fim = inicio + limite - 1
+        consulta= (supabase_admin.table('materias')
+                   .select('*', count="exact")
                    .order('ordem')
-                   .execute()
                    )
+        
+        if busca:
+            consulta= consulta.ilike(
+                'nome',
+                f'%{busca.strip()}%'
+            )
+        if area:
+            consulta= consulta.eq(
+                "area",
+                area
+            )
+        if ativo is not None:
+            consulta= consulta.eq(
+                "ativo",
+                ativo
+            )
+        consulta = (
+            consulta
+            .order("ordem")
+            .order("nome")
+            .range(inicio, fim)
+            .execute()
+        )
+                       
 
-        materias= resposta.data or []
+        materias= consulta.data or []
+        
+        for materia in materias:
+            topicos = materia.get("topicos") or []
+            aulas = materia.get("aulas") or []
+
+            materia["total_topicos"] = len(topicos)
+            materia["total_aulas"] = len(aulas)
+
+            materia.pop("topicos", None)
+            materia.pop("aulas", None)
+            
+        total_registros = consulta.count or 0
+        
+        total_paginas = (total_registros + limite - 1) // limite
 
         
         return {
-            "sucesso" : True,
-            "quantidade" : len(materias),
-            "materias" : materias
+            "sucesso": True,
+            "pagina": pagina,
+            "limite": limite,
+            "quantidade_pagina": len(materias),
+            "total_registros": total_registros,
+            "total_paginas": total_paginas,
+            "materias": materias
         }
 
     except Exception as erro:
@@ -37,9 +88,181 @@ def listar_materias():
 
 @router.get('/resumo')
 def obter_resumo():
-    pass
+    try:
+        resposta_materias= (supabase_admin.table('materias')
+                            .select('id, ativo')
+                            .execute()
+                            )
+        
+        resposta_topicos= (supabase_admin.table('topicos')
+                           .select('id, ativo')
+                           .execute()
+                           )
+        
+        materias= resposta_materias.data or []
+        topicos= resposta_topicos.data or []
+        
+        materias_ativas= [materia 
+                          for materia in materias
+                          if materia['ativo'] 
+                          ]
+        
+        topicos_ativos= [topico 
+                          for topico in topicos
+                          if topico['ativo'] 
+                          ]
 
+        return {
+            "sucesso": True,
+            "total_materias": len(materias),
+            "total_topicos": len(topicos),
+            "materias_ativas": len(materias_ativas),
+            "materias_inativas": len(materias) - len(materias_ativas),
+            "topicos_ativos": len(topicos_ativos),
+            "topicos_inativos": len(topicos) - len(topicos_ativos),
+        }
+        
+    except Exception as erro:
+        print(f"Erro ao obter resumo de matérias: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao obter resumo de matérias"
+        )
 
 @router.get('/{materia_id}')
 def buscar_materias(materia_id: UUID):
+    try:
+        resposta= (supabase_admin.table('materias')
+                .select('*')
+                .eq('id', str(materia_id))
+                .limit(1)
+                .execute()
+                )
+        print(resposta.data)
+        if not resposta.data:
+            raise HTTPException(
+                status_code= 404,
+                detail= 'Matéria não encontrada'
+            )
+        
+        materia = resposta.data[0]
+        
+        return{
+            'sucesso' : True,
+            'matéria' : materia
+        }
+    
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao buscar matéria: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao buscar matéria"
+        )
+    
+@router.get('/{materia_id}/topicos')
+def listar_topicos_da_materia(materia_id: UUID):
     pass
+
+@router.post('')
+def criar_materia(dados: MateriaCriar):
+    try:
+        nome = dados.nome.strip()
+        slug= gerar_slug(nome)
+        
+        nova_materia= dados.model_dump()
+        nova_materia['nome']= nome
+        nova_materia['slug']= slug
+        
+        resposta= (supabase_admin.table('materias')
+                   .select('id')
+                   .eq('slug', slug)
+                   .limit(1)
+                   .execute()
+                   )
+        if resposta.data:
+            raise HTTPException(
+                status_code= 409,
+                detail= 'Essa matéria já existe'
+            )
+
+        resposta= (supabase_admin.table('materias')
+                   .insert(nova_materia)
+                   .execute()
+                   )
+        
+        if not resposta.data:
+            raise HTTPException(
+                status_code= 500,
+                detail= 'Não foi possível criar a matéria'
+            )
+            
+        return {
+            'sucesso' : True,
+            'mensagem' : 'Matéria criada com sucesso',
+            'materia' : resposta.data[0]
+        }
+        
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao criar matéria: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao criar matéria"
+        )   
+        
+@router.patch('/{materia_id}')
+def editar_materia(
+    materia_id: UUID,
+    dados: MateriaEditar
+    ):
+    try:
+        alteracoes= dados.model_dump(
+            exclude_unset= True
+        )
+        
+        if not alteracoes:
+            raise HTTPException(
+                status_code= 400,
+                detail= 'Nenhuma alteração foi enviada'
+            )
+        
+        if 'nome' in alteracoes:
+            alteracoes['nome']= alteracoes['nome'].strip()
+            
+        resposta= (supabase_admin.table('materias')
+                   .update(alteracoes)
+                   .eq('id', str(materia_id))
+                   .execute()
+                   )
+        
+        if not resposta.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Matéria não encontrada"
+            )
+
+        return {
+            "sucesso": True,
+            "mensagem": "Matéria atualizada com sucesso",
+            "materia": resposta.data[0]
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao atualizar matéria: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao atualizar matéria"
+        )
+    
