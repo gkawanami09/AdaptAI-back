@@ -166,7 +166,46 @@ def buscar_materias(materia_id: UUID):
     
 @router.get('/{materia_id}/topicos')
 def listar_topicos_da_materia(materia_id: UUID):
-    pass
+    try:
+        resposta_materia = (supabase_admin.table('materias')
+                            .select('id')
+                            .eq('id', str(materia_id))
+                            .limit(1)
+                            .execute()
+                            )
+
+        if not resposta_materia.data:
+            raise HTTPException(
+                status_code=404,
+                detail='Matéria não encontrada'
+            )
+
+        resposta= (supabase_admin.table('topicos')
+                .select('*')
+                .eq('materia_id', str(materia_id))
+                .order('ordem')
+                .order('nome')
+                .execute()
+                )
+
+        topicos = resposta.data or []
+
+        return {
+            'sucesso': True,
+            'total_topicos': len(topicos),
+            'topicos': topicos
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao listar tópicos da matéria: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao listar tópicos da matéria"
+        )
 
 @router.post('')
 def criar_materia(dados: MateriaCriar):
