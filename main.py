@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import auth, usuarios, materias, questoes
 from routers.admin import materias as admin_materias
 from routers.admin import topicos as admin_topicos
+from routers.admin import aulas as admin_aulas
 
 app = FastAPI()
 
@@ -21,6 +22,7 @@ app.include_router(auth.router)
 app.include_router(usuarios.router)
 app.include_router(admin_materias.router)
 app.include_router(admin_topicos.router)
+app.include_router(admin_aulas.router)
 # app.include_router(materias.router)
 # app.include_router(questoes.router)
 
