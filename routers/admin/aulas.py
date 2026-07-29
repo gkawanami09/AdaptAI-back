@@ -134,6 +134,114 @@ def excluir_conteudos(aula_id: UUID):
         supabase_admin.table("aulas_conteudo").delete().in_("id", ids_conteudo).execute()
 
 
+# Applies the common aula-listing filters to a supabase query
+def filtrar_aulas(consulta, busca, dificuldade, ativo, mais_cobrado, materia_id):
+    if busca:
+        consulta = consulta.ilike("titulo", f"%{busca.strip()}%")
+    if dificuldade:
+        consulta = consulta.eq("dificuldade", dificuldade)
+    if ativo is not None:
+        consulta = consulta.eq("ativo", ativo)
+    if mais_cobrado is not None:
+        consulta = consulta.eq("mais_cobrado", mais_cobrado)
+    if materia_id:
+        consulta = consulta.eq("materia_id", str(materia_id))
+    return consulta
+
+
+# Lists aulas across all matérias, with filtering, pagination and summarized conteudos
+@router.get("")
+def listar_aulas(
+    busca: str | None = None,
+    dificuldade: str | None = None,
+    ativo: bool | None = None,
+    mais_cobrado: bool | None = None,
+    materia_id: UUID | None = None,
+    pagina: int = Query(default=1, ge=1),
+    limite: int = Query(default=6, ge=1, le=50),
+    ordenar: str | None = None,
+):
+    try:
+        inicio = (pagina - 1) * limite
+        fim = inicio + limite - 1
+
+        consulta = filtrar_aulas(
+            supabase_admin.table("aulas").select("*", count="exact"),
+            busca, dificuldade, ativo, mais_cobrado, materia_id
+        )
+
+        if ordenar == "nome-za":
+            consulta = consulta.order("titulo", desc=True)
+        elif ordenar == "recentes":
+            consulta = consulta.order("ordem", desc=True)
+        else:
+            consulta = consulta.order("titulo")
+
+        resposta = consulta.range(inicio, fim).execute()
+        aulas = resposta.data or []
+        total_registros = resposta.count or 0
+        total_paginas = max(1, (total_registros + limite - 1) // limite)
+
+        stats = filtrar_aulas(
+            supabase_admin.table("aulas").select("id, ativo, mais_cobrado"),
+            busca, dificuldade, ativo, mais_cobrado, materia_id
+        ).execute().data or []
+
+        total_publicadas = sum(1 for aula in stats if aula["ativo"])
+        total_mais_cobradas = sum(1 for aula in stats if aula["mais_cobrado"])
+
+        ids_aulas = [aula["id"] for aula in aulas]
+        _, ids_para_nome = obter_mapa_tipos()
+        conteudos = (
+            supabase_admin.table("aulas_conteudo")
+            .select("aula_id, ordem, duracao, ativo, id_tipo")
+            .in_("aula_id", ids_aulas)
+            .order("ordem")
+            .execute()
+            .data or []
+        ) if ids_aulas else []
+
+        total_conteudos = (
+            supabase_admin.table("aulas_conteudo")
+            .select("id", count="exact")
+            .in_("aula_id", [aula["id"] for aula in stats])
+            .execute()
+            .count or 0
+        ) if stats else 0
+
+        for aula in aulas:
+            aula["conteudos"] = [
+                {
+                    "tipo": ids_para_nome.get(conteudo["id_tipo"]),
+                    "ordem": conteudo["ordem"],
+                    "duracao": conteudo["duracao"],
+                    "ativo": conteudo["ativo"],
+                }
+                for conteudo in conteudos
+                if conteudo["aula_id"] == aula["id"]
+            ]
+
+        return {
+            "sucesso": True,
+            "pagina": pagina,
+            "limite": limite,
+            "total_registros": total_registros,
+            "total_paginas": total_paginas,
+            "total_aulas": total_registros,
+            "total_conteudos": total_conteudos,
+            "total_publicadas": total_publicadas,
+            "total_mais_cobradas": total_mais_cobradas,
+            "aulas": aulas,
+        }
+
+    except Exception as erro:
+        print(f"Erro ao listar aulas: {erro}")
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao listar aulas"
+        )
+
+
 # Lista as aulas de uma matéria
 @router.get("/por-materia/{materia_id}")
 def listar_aulas_por_materia(materia_id: UUID):
