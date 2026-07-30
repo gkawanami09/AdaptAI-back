@@ -17,7 +17,7 @@ def listar_materias(
     area : str | None= None,
     ativo : bool | None= None,
     pagina : int= Query(default= 1, ge= 1),
-    limite : int= Query(default= 6, ge= 1, le= 50)
+    limite : int= Query(default= 6, ge= 1, le= 100)
 ):
     try:
         inicio = (pagina - 1) * limite

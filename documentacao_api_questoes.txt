@@ -1,0 +1,1141 @@
+DOCUMENTACAO DA API - MODULO DE QUESTOES
+==========================================
+
+ESCOPO DESTA DOCUMENTACAO
+--------------------------
+Esta documentacao reflete exatamente o codigo-fonte existente no backend, nos arquivos:
+
+- routers/admin/questoes.py
+- routers/admin/tipos_prova.py
+- routers/admin/listas_questoes.py
+- schemas/questoes_schema.py
+- utils/autenticacao.py
+- utils/textos.py
+
+Tabelas do banco de dados relacionadas ao dominio de questoes:
+
+- tipos_prova
+- questoes
+- alternativas_questao
+- listas_questoes
+- itens_lista_questoes
+
+Todos os 4 modulos abaixo estao implementados: Tipos de Prova, Questoes
+(incluindo Alternativas embutidas), Listas de Questoes e Itens da Lista
+(embutidos nas rotas de Listas).
+
+Autenticacao: todas as rotas de todos os routers abaixo usam
+dependencies=[Depends(exigir_administrador)] a nivel de router, portanto
+TODAS exigem:
+  1. Header Authorization: Bearer <token> (validado via Supabase Auth em
+     utils.autenticacao.pegar_usuario_atual, usando supabase.auth.get_user(token))
+  2. Usuario autenticado deve possuir perfil na tabela "perfis" com
+     tipo_usuario == "admin" (validado em utils.autenticacao.exigir_administrador)
+
+Erros de autenticacao/autorizacao possiveis em QUALQUER rota deste documento:
+  - 401 -> "Token inválido ou expirado." (token invalido)
+  - 401 -> "Usuário não autenticado." (excecao generica ao validar token)
+  - 404 -> "Perfil não encontrado" (usuario autenticado mas sem registro em "perfis")
+  - 403 -> "Acesso permitido apenas para administradores" (perfil existe mas
+    tipo_usuario != "admin")
+
+
+==========================================
+# Tipos de Prova
+==========================================
+
+Router: routers/admin/tipos_prova.py
+Prefixo: /admin/tipos-prova
+Tag: "Admin - Tipos de Prova"
+
+Tabela "tipos_prova" possui campo "slug" (unique). Todas as rotas de busca
+individual usam UUID (id), nao slug, pois nao ha necessidade de rota por slug
+neste modulo (segue o mesmo padrao usado por materias, que tambem tem slug mas
+busca por id).
+
+------------------------------------------
+## GET /admin/tipos-prova
+------------------------------------------
+Descricao: Lista tipos de prova cadastrados, com filtro e paginacao.
+
+Query Params (todos opcionais, exceto pagina/limite que possuem default):
+  - busca: str | None -> ilike("nome", "%{busca.strip()}%")
+  - ativo: bool | None -> eq("ativo", ativo), se not None
+  - pagina: int, default 1, Query(ge=1)
+  - limite: int, default 6, Query(ge=1, le=50)
+
+Ordenacao: sempre order("nome") (ascendente, fixo, sem parametro "ordenar"
+neste endpoint).
+
+Paginacao:
+  - inicio = (pagina - 1) * limite
+  - fim = inicio + limite - 1
+  - .range(inicio, fim)
+  - total_registros = count="exact" da query filtrada
+  - total_paginas = max(1, ceil(total_registros / limite))
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "pagina": <int>,
+    "limite": <int>,
+    "total_registros": <int>,
+    "total_paginas": <int>,
+    "tipos_prova": [
+        {
+            "id": "uuid",
+            "nome": "string",
+            "slug": "string",
+            "descricao": "string | null",
+            "ativo": true,
+            "criado_em": "timestamp"
+        }
+    ]
+}
+
+Response de erro:
+  - 500 -> { "detail": "Erro ao listar tipos de prova" }
+
+Status HTTP utilizados: 200, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## GET /admin/tipos-prova/resumo
+------------------------------------------
+Descricao: Retorna contagem total de tipos de prova ativos/inativos.
+
+Query Params: nenhum.
+Payload: nao se aplica.
+
+Logica: SELECT id, ativo FROM tipos_prova (sem filtros), depois calcula em
+memoria quantos tem ativo == True.
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "total_tipos_prova": <int>,
+    "tipos_prova_ativos": <int>,
+    "tipos_prova_inativos": <int>
+}
+
+Response de erro:
+  - 500 -> { "detail": "Erro ao obter resumo de tipos de prova" }
+
+Status HTTP utilizados: 200, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## GET /admin/tipos-prova/{tipo_prova_id}
+------------------------------------------
+Descricao: Busca um tipo de prova pelo ID.
+
+Parametros de rota:
+  - tipo_prova_id: UUID (obrigatorio)
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "tipo_prova": {
+        "id": "uuid",
+        "nome": "string",
+        "slug": "string",
+        "descricao": "string | null",
+        "ativo": true,
+        "criado_em": "timestamp"
+    }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Tipo de prova não encontrado" }
+  - 500 -> { "detail": "Erro ao buscar tipo de prova" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## POST /admin/tipos-prova
+------------------------------------------
+Descricao: Cria um novo tipo de prova. Gera slug automaticamente a partir do
+nome usando utils.textos.gerar_slug().
+
+Schema Pydantic do body: TipoProvaCriar (schemas/questoes_schema.py)
+
+Campos:
+  - nome: str, obrigatorio, Field(min_length=2, max_length=100)
+  - descricao: str | None, opcional, default None
+  - ativo: bool, opcional, default True
+
+Body esperado:
+{
+    "nome": "string",
+    "descricao": "string | null",
+    "ativo": true
+}
+
+Campos obrigatorios: nome.
+Campos opcionais: descricao (default null), ativo (default true).
+
+Logica do endpoint (criar_tipo_prova):
+  1. nome = dados.nome.strip(); slug = gerar_slug(nome)
+  2. Verifica duplicidade: SELECT id FROM tipos_prova WHERE slug = slug
+     LIMIT 1. Se existir -> 409 "Esse tipo de prova já existe".
+  3. INSERT em tipos_prova com nome (strip) e slug gerado.
+  4. Se insert nao retornar dados -> 500 "Não foi possível criar o tipo de
+     prova".
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Tipo de prova criado com sucesso",
+    "tipo_prova": { ... mesma estrutura do GET por id ... }
+}
+
+Response de erro:
+  - 409 -> { "detail": "Esse tipo de prova já existe" }
+  - 422 -> erro de validacao Pydantic (nome ausente ou fora do min/max length)
+  - 500 -> { "detail": "Não foi possível criar o tipo de prova" }
+  - 500 -> { "detail": "Erro ao criar tipo de prova" } (excecao generica)
+
+Status HTTP utilizados: 200, 409, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+------------------------------------------
+## PATCH /admin/tipos-prova/{tipo_prova_id}
+------------------------------------------
+Descricao: Atualiza parcialmente um tipo de prova. Se "nome" for alterado, o
+slug e regerado automaticamente e verificado quanto a duplicidade (excluindo o
+proprio registro).
+
+Parametros de rota:
+  - tipo_prova_id: UUID (obrigatorio)
+
+Schema Pydantic do body: TipoProvaEditar (todos os campos opcionais):
+  - nome: str | None, se enviado: Field(min_length=2, max_length=100)
+  - descricao: str | None
+  - ativo: bool | None
+
+Body esperado (qualquer subconjunto):
+{
+    "nome": "string",
+    "descricao": "string | null",
+    "ativo": true
+}
+
+Logica do endpoint (editar_tipo_prova):
+  1. alteracoes = dados.model_dump(exclude_unset=True). Se vazio -> 400
+     "Nenhuma alteração foi enviada".
+  2. Se "nome" estiver em alteracoes:
+     a. nome = alteracoes["nome"].strip(); slug = gerar_slug(nome)
+     b. Verifica duplicidade: SELECT id FROM tipos_prova WHERE slug = slug
+        AND id != tipo_prova_id LIMIT 1. Se existir -> 409 "Esse tipo de prova
+        já existe".
+     c. alteracoes["nome"] = nome; alteracoes["slug"] = slug
+  3. UPDATE tipos_prova SET ... WHERE id = tipo_prova_id. Se nao retornar
+     dados -> 404 "Tipo de prova não encontrado".
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Tipo de prova atualizado com sucesso",
+    "tipo_prova": { ... mesma estrutura do GET por id ... }
+}
+
+Response de erro:
+  - 400 -> { "detail": "Nenhuma alteração foi enviada" }
+  - 409 -> { "detail": "Esse tipo de prova já existe" }
+  - 404 -> { "detail": "Tipo de prova não encontrado" }
+  - 422 -> erro de validacao Pydantic
+  - 500 -> { "detail": "Erro ao atualizar tipo de prova" }
+
+Status HTTP utilizados: 200, 400, 404, 409, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+------------------------------------------
+## DELETE /admin/tipos-prova/{tipo_prova_id}
+------------------------------------------
+Descricao: Exclui um tipo de prova.
+
+Parametros de rota:
+  - tipo_prova_id: UUID (obrigatorio)
+
+Logica do endpoint (excluir_tipo_prova):
+  1. SELECT id FROM tipos_prova WHERE id = tipo_prova_id LIMIT 1. Se nao
+     existir -> 404 "Tipo de prova não encontrado".
+  2. DELETE FROM tipos_prova WHERE id = tipo_prova_id.
+     OBS: as tabelas "questoes" e "listas_questoes" referenciam
+     tipo_prova_id com "on delete set null" no DDL fornecido, portanto a
+     exclusao de um tipo de prova em uso apenas anula essa referencia nos
+     registros relacionados (nao ha bloqueio no codigo nem no banco).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Tipo de prova excluído com sucesso"
+}
+
+Response de erro:
+  - 404 -> { "detail": "Tipo de prova não encontrado" }
+  - 500 -> { "detail": "Erro ao excluir tipo de prova" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+==========================================
+# Questões
+==========================================
+
+Router: routers/admin/questoes.py
+Prefixo: /admin/questoes
+Tag: "Admin - Questões"
+
+A tabela "questoes" NAO possui campo slug; todas as buscas usam UUID.
+
+------------------------------------------
+## GET /admin/questoes
+------------------------------------------
+Descricao: Lista questoes cadastradas, com filtros, paginacao e contagem
+agregada de alternativas.
+
+Query Params (todos opcionais, exceto pagina/limite que possuem default):
+  - busca: str | None -> ilike("enunciado", "%{busca.strip()}%")
+  - materia_id: UUID | None -> eq("materia_id", str(materia_id))
+  - dificuldade: str | None -> eq("dificuldade", dificuldade)
+      OBS: recebido como str livre neste endpoint (sem validacao de enum
+      aqui; a validacao de enum so existe nos schemas de criacao/edicao).
+  - ativo: bool | None -> eq("ativo", ativo), se not None
+  - pagina: int, default 1, Query(ge=1)
+  - limite: int, default 6, Query(ge=1, le=50)
+  - ordenar: str | None
+      - "enunciado-az" -> order("enunciado") (ascendente)
+      - "enunciado-za" -> order("enunciado", desc=True)
+      - qualquer outro valor (incluindo None) -> order("criado_em", desc=True)
+
+Paginacao:
+  - inicio = (pagina - 1) * limite; fim = inicio + limite - 1
+  - .range(inicio, fim) na query principal
+  - total_registros = count="exact" da query principal (com filtros, sem
+    paginacao)
+  - total_paginas = max(1, ceil(total_registros / limite))
+
+Estatisticas agregadas (stats):
+  - Segunda query em "questoes" (select "id, ativo") com os MESMOS filtros,
+    sem paginacao, para calcular:
+      - total_publicadas = quantidade com ativo == True
+      - total_inativas = len(stats) - total_publicadas
+  - Busca em "alternativas_questao" (select "questao_id") filtrando por
+    questao_id IN (ids de TODAS as questoes filtradas, sem paginacao) para
+    calcular total_alternativas GLOBAL (soma de todas) e, por questao exibida
+    na pagina atual, o campo "total_alternativas" individual (contagem em
+    memoria comparando questao_id).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "pagina": <int>,
+    "limite": <int>,
+    "total_registros": <int>,
+    "total_paginas": <int>,
+    "total_questoes": <int, igual a total_registros>,
+    "total_publicadas": <int>,
+    "total_inativas": <int>,
+    "total_alternativas": <int, total global das questoes filtradas>,
+    "questoes": [
+        {
+            ... todas as colunas da tabela "questoes" (select "*"): id,
+            tipo_prova_id, materia_id, topico_id, aula_id, ano, dificuldade,
+            enunciado, imagem_url, dica, explicacao, ativo, criado_em,
+            atualizado_em, alternativa_correta ...,
+            "total_alternativas": <int>
+        }
+    ]
+}
+
+Response de erro:
+  - 500 -> { "detail": "Erro ao listar questões" }
+
+Status HTTP utilizados: 200, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## GET /admin/questoes/{questao_id}
+------------------------------------------
+Descricao: Busca uma questao especifica pelo ID, incluindo suas alternativas
+com o campo "correta" calculado dinamicamente.
+
+Parametros de rota:
+  - questao_id: UUID (obrigatorio)
+
+Logica (funcao interna montar_questao):
+  1. SELECT * FROM questoes WHERE id = questao_id LIMIT 1. Se nao encontrar,
+     retorna None -> handler lanca 404.
+  2. SELECT * FROM alternativas_questao WHERE questao_id = questao_id ORDER
+     BY ordem.
+  3. Monta lista "alternativas" com:
+     { "id": alt["id"], "letra": alt["letra"], "texto": alt["conteudo"],
+       "correta": alt["id"] == questao["alternativa_correta"] }
+     O campo "correta" e calculado comparando o id de cada alternativa com a
+     coluna questoes.alternativa_correta (FK), refletindo exatamente a
+     estrutura do DDL informado (a tabela alternativas_questao nao possui
+     coluna booleana "correta"; a alternativa correta e definida
+     exclusivamente pela FK em questoes).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "questao": {
+        ... todas as colunas de "questoes" (select "*") ...,
+        "alternativas": [
+            { "id": "uuid", "letra": "A"|"B"|"C"|"D"|"E", "texto": "string", "correta": bool },
+            ...
+        ]
+    }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Questão não encontrada" }
+  - 500 -> { "detail": "Erro ao buscar questão" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## POST /admin/questoes
+------------------------------------------
+Descricao: Cria uma nova questao junto com suas alternativas, definindo a
+alternativa correta via FK apos a insercao das alternativas.
+
+Schema Pydantic do body: QuestaoCriar (schemas/questoes_schema.py)
+
+Campos do schema QuestaoCriar:
+  - tipo_prova_id: UUID | None, opcional, default None
+  - materia_id: UUID, obrigatorio
+  - topico_id: UUID | None, opcional, default None
+  - aula_id: UUID | None, opcional, default None
+  - ano: int | None, opcional, default None
+  - dificuldade: Literal["facil", "medio", "dificil"], opcional, default "medio"
+      (alinhado ao CHECK constraint questoes_dificuldade_check do banco)
+  - enunciado: str, obrigatorio, Field(min_length=1)
+  - imagem_url: str | None, opcional, default None
+  - dica: str | None, opcional, default None
+  - explicacao: str | None, opcional, default None
+  - ativo: bool, opcional, default True
+  - alternativas: list[AlternativaCriar], obrigatorio
+
+Schema Pydantic AlternativaCriar (usado dentro de "alternativas"):
+  - letra: Literal["A", "B", "C", "D", "E"], obrigatorio
+      (alinhado ao CHECK constraint alternativas_questao_letra_check do banco)
+  - texto: str, obrigatorio
+  - correta: bool, opcional, default False
+
+Validacao adicional via @model_validator(mode="after") em QuestaoCriar
+(validar_alternativas):
+  - Se len(alternativas) < 2 -> ValueError("A questão deve ter no mínimo 2
+    alternativas")
+  - Se quantidade de alternativas com correta == True for diferente de 1 ->
+    ValueError("A questão deve ter exatamente 1 alternativa correta")
+  - Se houver letras repetidas entre as alternativas enviadas -> ValueError
+    ("Não pode haver alternativas com a mesma letra")
+  Qualquer violacao resulta em HTTP 422 (erro de validacao padrao do
+  FastAPI/Pydantic).
+
+Body esperado:
+{
+    "tipo_prova_id": "uuid | null",
+    "materia_id": "uuid",
+    "topico_id": "uuid | null",
+    "aula_id": "uuid | null",
+    "ano": 2024,
+    "dificuldade": "facil" | "medio" | "dificil",
+    "enunciado": "string",
+    "imagem_url": "string | null",
+    "dica": "string | null",
+    "explicacao": "string | null",
+    "ativo": true,
+    "alternativas": [
+        { "letra": "A", "texto": "string", "correta": true },
+        { "letra": "B", "texto": "string", "correta": false }
+    ]
+}
+
+Campos obrigatorios: materia_id, enunciado, alternativas (minimo 2 itens,
+cada item exigindo letra dentre A-E e texto; exatamente 1 alternativa da
+lista deve ter correta = true; letras nao podem se repetir).
+
+Campos opcionais: tipo_prova_id, topico_id, aula_id, ano, dificuldade
+(default "medio"), imagem_url, dica, explicacao, ativo (default true); dentro
+de cada alternativa, "correta" (default false).
+
+Logica do endpoint (criar_questao):
+  1. Verifica existencia da materia: SELECT id FROM materias WHERE id =
+     materia_id LIMIT 1. Se nao existir -> 404 "Matéria não encontrada".
+     OBS: NAO ha verificacao de existencia de topico_id, tipo_prova_id ou
+     aula_id, mesmo quando informados.
+  2. Monta nova_questao = dados.model_dump(exclude={"alternativas"}),
+     convertendo materia_id, topico_id, tipo_prova_id e aula_id para string
+     (ou None quando ausentes), e define alternativa_correta = None
+     inicialmente (a questao ainda nao tem alternativas cadastradas).
+  3. INSERT na tabela "questoes". Se resposta.data vier vazio -> 500 "Não foi
+     possível criar a questão".
+  4. Extrai questao_id = resposta.data[0]["id"].
+  5. Chama salvar_alternativas(questao_id, dados.alternativas):
+     a. Para cada alternativa (na ordem enviada, indice comecando em 0),
+        INSERT em "alternativas_questao" com:
+        { "questao_id": str(questao_id), "letra": alternativa.letra,
+          "conteudo": alternativa.texto, "ordem": indice }
+     b. Guarda o id retornado da alternativa marcada com correta == True.
+     c. Ao final, UPDATE questoes SET alternativa_correta = <id da
+        alternativa correta> WHERE id = questao_id.
+  6. Retorna montar_questao(questao_id) (ver GET por id) na resposta final.
+
+Response de sucesso (o codigo nao define status_code customizado no
+decorator @router.post(''), portanto o FastAPI retorna o status default 200):
+{
+    "sucesso": true,
+    "mensagem": "Questão criada com sucesso",
+    "questao": { ... mesma estrutura do GET /admin/questoes/{id} ... }
+}
+
+Response de erro:
+  - 422 -> erro de validacao Pydantic (payload invalido, tipos incorretos,
+    menos de 2 alternativas, quantidade de corretas != 1, letras repetidas,
+    letra fora de A-E, dificuldade fora do Literal permitido, campos
+    obrigatorios ausentes)
+  - 404 -> { "detail": "Matéria não encontrada" }
+  - 500 -> { "detail": "Não foi possível criar a questão" }
+  - 500 -> { "detail": "Erro ao criar questão" } (excecao generica)
+
+Status HTTP utilizados: 200, 404, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+------------------------------------------
+## PATCH /admin/questoes/{questao_id}
+------------------------------------------
+Descricao: Atualiza parcialmente uma questao existente e, opcionalmente,
+substitui completamente suas alternativas (e recalcula alternativa_correta).
+
+Parametros de rota:
+  - questao_id: UUID (obrigatorio)
+
+Schema Pydantic do body: QuestaoEditar (todos os campos opcionais, permitindo
+atualizacao parcial via exclude_unset=True):
+  - tipo_prova_id: UUID | None
+  - materia_id: UUID | None
+  - topico_id: UUID | None
+  - aula_id: UUID | None
+  - ano: int | None
+  - dificuldade: Literal["facil", "medio", "dificil"] | None
+  - enunciado: str | None, se enviado: Field(min_length=1)
+  - imagem_url: str | None
+  - dica: str | None
+  - explicacao: str | None
+  - ativo: bool | None
+  - alternativas: list[AlternativaCriar] | None
+
+Mesma validacao @model_validator(mode="after") de QuestaoCriar (minimo 2
+alternativas, exatamente 1 correta, sem letras repetidas), executada SOMENTE
+se "alternativas" for enviado (diferente de None). Se nao enviado, a
+validacao e pulada.
+
+Body esperado (qualquer subconjunto dos campos abaixo):
+{
+    "tipo_prova_id": "uuid | null",
+    "materia_id": "uuid",
+    "topico_id": "uuid | null",
+    "aula_id": "uuid | null",
+    "ano": 2024,
+    "dificuldade": "facil" | "medio" | "dificil",
+    "enunciado": "string",
+    "imagem_url": "string | null",
+    "dica": "string | null",
+    "explicacao": "string | null",
+    "ativo": true,
+    "alternativas": [
+        { "letra": "A", "texto": "string", "correta": true },
+        { "letra": "B", "texto": "string", "correta": false }
+    ]
+}
+
+Logica do endpoint (editar_questao):
+  1. SELECT id FROM questoes WHERE id = questao_id LIMIT 1. Se nao existir ->
+     404 "Questão não encontrada" (verificacao feita ANTES de processar
+     qualquer alteracao, diferente da versao anterior deste codigo).
+  2. alteracoes = dados.model_dump(exclude_unset=True, exclude={"alternativas"}).
+  3. Se "alteracoes" vazio E dados.alternativas for None -> 400 "Nenhuma
+     alteração foi enviada".
+  4. Converte para string (quando presentes e nao nulos): materia_id,
+     topico_id, tipo_prova_id, aula_id.
+  5. Se "alteracoes" nao vazio, UPDATE questoes SET ... WHERE id = questao_id
+     (resultado nao verificado explicitamente pois a existencia ja foi
+     confirmada no passo 1).
+  6. Se dados.alternativas nao for None: exclui todas as alternativas atuais
+     (DELETE em alternativas_questao WHERE questao_id = questao_id) e insere
+     as novas via salvar_alternativas (mesma logica do POST, recalculando e
+     atualizando alternativa_correta ao final).
+  7. Retorna montar_questao(questao_id).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Questão atualizada com sucesso",
+    "questao": { ... mesma estrutura do GET /admin/questoes/{id} ... }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Questão não encontrada" }
+  - 400 -> { "detail": "Nenhuma alteração foi enviada" }
+  - 422 -> erro de validacao Pydantic (quando "alternativas" e enviado com
+    violacao das regras, ou qualquer campo com tipo invalido)
+  - 500 -> { "detail": "Erro ao atualizar questão" }
+
+Status HTTP utilizados: 200, 400, 404, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+------------------------------------------
+## DELETE /admin/questoes/{questao_id}
+------------------------------------------
+Descricao: Exclui uma questao e todas as suas alternativas associadas.
+
+Parametros de rota:
+  - questao_id: UUID (obrigatorio)
+
+Logica do endpoint (excluir_questao):
+  1. SELECT id FROM questoes WHERE id = questao_id LIMIT 1. Se nao existir ->
+     404 "Questão não encontrada".
+  2. UPDATE questoes SET alternativa_correta = NULL WHERE id = questao_id
+     (necessario para remover a referencia da FK antes de apagar as
+     alternativas, ja que questoes.alternativa_correta referencia
+     alternativas_questao.id).
+  3. DELETE FROM alternativas_questao WHERE questao_id = questao_id.
+  4. DELETE FROM questoes WHERE id = questao_id.
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Questão excluída com sucesso"
+}
+
+Response de erro:
+  - 404 -> { "detail": "Questão não encontrada" }
+  - 500 -> { "detail": "Erro ao excluir questão" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+==========================================
+# Alternativas
+==========================================
+
+NAO EXISTE um router ou conjunto de endpoints dedicado exclusivamente a
+"Alternativas". As alternativas sao gerenciadas EXCLUSIVAMENTE de forma
+embutida dentro das rotas de Questoes (POST, PATCH, GET e DELETE de
+/admin/questoes), atraves das funcoes internas do arquivo
+routers/admin/questoes.py:
+
+  - montar_questao(questao_id): le as alternativas da questao (tabela
+    "alternativas_questao") e calcula o campo "correta" comparando o id de
+    cada alternativa com questoes.alternativa_correta.
+  - salvar_alternativas(questao_id, alternativas): insere uma alternativa por
+    vez na tabela "alternativas_questao" (campos: questao_id, letra,
+    conteudo, ordem) e, ao final, atualiza questoes.alternativa_correta com o
+    id da alternativa marcada como correta no payload.
+  - excluir_alternativas(questao_id): remove todas as alternativas daquela
+    questao (DELETE FROM alternativas_questao WHERE questao_id = ...).
+
+Nao ha:
+  - Endpoint para listar alternativas isoladamente (fora do contexto de uma
+    questao).
+  - Endpoint para criar/editar/excluir uma alternativa individual (toda
+    alteracao de alternativas ocorre substituindo o conjunto inteiro, via
+    PATCH /admin/questoes/{id} enviando o campo "alternativas").
+
+Validacoes aplicadas (via Pydantic, nos schemas QuestaoCriar/QuestaoEditar):
+  - Minimo de 2 alternativas por questao.
+  - Exatamente 1 alternativa marcada como correta.
+  - Letra de cada alternativa restrita a A, B, C, D ou E (Literal).
+  - Letras nao podem se repetir dentro da mesma lista de alternativas
+    enviada (validado em Python, alem da constraint UNIQUE(questao_id, letra)
+    que ja existe no banco).
+
+
+==========================================
+# Listas de Questões
+==========================================
+
+Router: routers/admin/listas_questoes.py
+Prefixo: /admin/listas-questoes
+Tag: "Admin - Listas de Questões"
+
+A tabela "listas_questoes" NAO possui campo slug; todas as buscas usam UUID.
+
+------------------------------------------
+## GET /admin/listas-questoes
+------------------------------------------
+Descricao: Lista as listas de questoes cadastradas, com filtros, paginacao e
+contagem de questoes vinculadas.
+
+Query Params (todos opcionais, exceto pagina/limite que possuem default):
+  - busca: str | None -> ilike("titulo", "%{busca.strip()}%")
+  - materia_id: UUID | None -> eq("materia_id", str(materia_id))
+  - tipo_lista: str | None -> eq("tipo_lista", tipo_lista)
+      OBS: recebido como str livre neste endpoint (sem validacao de enum
+      aqui; a validacao de enum so existe no schema de criacao/edicao).
+  - pagina: int, default 1, Query(ge=1)
+  - limite: int, default 6, Query(ge=1, le=50)
+  - ordenar: str | None
+      - "titulo-az" -> order("titulo")
+      - "titulo-za" -> order("titulo", desc=True)
+      - qualquer outro valor (incluindo None) -> order("criado_em", desc=True)
+
+Paginacao: mesmo padrao dos demais modulos (range, count="exact",
+total_paginas = max(1, ceil(total_registros/limite))).
+
+Para cada lista retornada na pagina atual, e calculado o campo
+"total_questoes": quantidade de registros em "itens_lista_questoes" cujo
+lista_questoes_id bate com o id da lista (contagem feita em memoria a partir
+de uma busca .in_("lista_questoes_id", ids_das_listas_da_pagina)).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "pagina": <int>,
+    "limite": <int>,
+    "total_registros": <int>,
+    "total_paginas": <int>,
+    "total_listas": <int, igual a total_registros>,
+    "listas": [
+        {
+            ... todas as colunas da tabela "listas_questoes" (select "*"):
+            id, usuario_id, titulo, descricao, tipo_prova_id, materia_id,
+            topico_id, dificuldade, tipo_lista, criado_em, atualizado_em,
+            criado_por ...,
+            "total_questoes": <int>
+        }
+    ]
+}
+
+Response de erro:
+  - 500 -> { "detail": "Erro ao listar listas de questões" }
+
+Status HTTP utilizados: 200, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## GET /admin/listas-questoes/{lista_id}
+------------------------------------------
+Descricao: Busca uma lista de questoes especifica pelo ID, incluindo seus
+itens (questao_id + ordem).
+
+Parametros de rota:
+  - lista_id: UUID (obrigatorio)
+
+Logica (funcao interna montar_lista):
+  1. SELECT * FROM listas_questoes WHERE id = lista_id LIMIT 1. Se nao
+     encontrar, retorna None -> handler lanca 404.
+  2. SELECT * FROM itens_lista_questoes WHERE lista_questoes_id = lista_id
+     ORDER BY ordem.
+  3. Monta lista "itens" com apenas { "questao_id": ..., "ordem": ... } por
+     item (nao traz os dados completos da questao; para isso e necessario
+     chamar GET /admin/questoes/{id} separadamente para cada questao_id).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "lista": {
+        ... todas as colunas de "listas_questoes" (select "*") ...,
+        "itens": [
+            { "questao_id": "uuid", "ordem": <int> },
+            ...
+        ]
+    }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Lista de questões não encontrada" }
+  - 500 -> { "detail": "Erro ao buscar lista de questões" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## POST /admin/listas-questoes
+------------------------------------------
+Descricao: Cria uma nova lista de questoes, opcionalmente ja com itens
+(questoes) vinculados em uma ordem especifica.
+
+Schema Pydantic do body: ListaQuestoesCriar (schemas/questoes_schema.py)
+
+Campos:
+  - titulo: str, obrigatorio, Field(min_length=2, max_length=150)
+  - descricao: str | None, opcional, default None
+  - tipo_prova_id: UUID | None, opcional, default None
+  - materia_id: UUID | None, opcional, default None
+  - topico_id: UUID | None, opcional, default None
+  - dificuldade: Literal["facil", "medio", "dificil"] | None, opcional,
+    default None
+  - tipo_lista: Literal["fixa", "gerada_ia", "questoes_erradas", "favoritas",
+    "revisao"], obrigatorio
+      (alinhado ao CHECK constraint listas_questoes_tipo_lista_check do banco)
+  - itens: list[ItemListaCriar], opcional, default [] (lista vazia)
+
+Schema Pydantic ItemListaCriar (usado dentro de "itens"):
+  - questao_id: UUID, obrigatorio
+  - ordem: int, opcional, default 0, Field(ge=0)
+
+OBS: nao ha validacao Pydantic de duplicidade de questao_id dentro da lista
+de itens enviada no POST; se o cliente enviar a mesma questao_id duas vezes,
+o segundo INSERT em itens_lista_questoes falhara na constraint UNIQUE
+(lista_questoes_id, questao_id) do banco, sendo capturado apenas pelo except
+generico do endpoint (500 "Erro ao criar lista de questões").
+OBS: nao ha verificacao de existencia de materia_id, topico_id, tipo_prova_id
+ou de cada questao_id em "itens" antes da insercao (ao contrario do modulo de
+Questoes, que verifica materia_id).
+
+Body esperado:
+{
+    "titulo": "string",
+    "descricao": "string | null",
+    "tipo_prova_id": "uuid | null",
+    "materia_id": "uuid | null",
+    "topico_id": "uuid | null",
+    "dificuldade": "facil" | "medio" | "dificil" | null,
+    "tipo_lista": "fixa" | "gerada_ia" | "questoes_erradas" | "favoritas" | "revisao",
+    "itens": [
+        { "questao_id": "uuid", "ordem": 0 },
+        { "questao_id": "uuid", "ordem": 1 }
+    ]
+}
+
+Campos obrigatorios: titulo, tipo_lista.
+Campos opcionais: descricao, tipo_prova_id, materia_id, topico_id,
+dificuldade (todos default null), itens (default lista vazia).
+
+Logica do endpoint (criar_lista):
+  1. Monta nova_lista = dados.model_dump(exclude={"itens"}), convertendo
+     tipo_prova_id, materia_id e topico_id para string (ou None), e titulo
+     para titulo.strip().
+     OBS: os campos "usuario_id" e "criado_por" (colunas existentes na tabela
+     "listas_questoes" no DDL) nao constam no schema ListaQuestoesCriar,
+     portanto nao sao preenchidos por este endpoint (ficam NULL no INSERT).
+  2. INSERT em "listas_questoes". Se nao retornar dados -> 500 "Não foi
+     possível criar a lista de questões".
+  3. Extrai lista_id = resposta.data[0]["id"].
+  4. Se dados.itens nao for vazio, chama salvar_itens(lista_id, dados.itens):
+     insere um registro por item em "itens_lista_questoes" com
+     { "lista_questoes_id": str(lista_id), "questao_id": str(item.questao_id),
+       "ordem": item.ordem }.
+  5. Retorna montar_lista(lista_id).
+
+Response de sucesso (o codigo nao define status_code customizado, portanto o
+FastAPI retorna o status default 200):
+{
+    "sucesso": true,
+    "mensagem": "Lista de questões criada com sucesso",
+    "lista": { ... mesma estrutura do GET /admin/listas-questoes/{id} ... }
+}
+
+Response de erro:
+  - 422 -> erro de validacao Pydantic (titulo ausente ou fora do min/max
+    length, tipo_lista fora do Literal permitido, dificuldade fora do Literal
+    permitido, itens com campos invalidos)
+  - 500 -> { "detail": "Não foi possível criar a lista de questões" }
+  - 500 -> { "detail": "Erro ao criar lista de questões" } (excecao generica,
+    inclui violacao de UNIQUE constraint por questao_id duplicada em itens)
+
+Status HTTP utilizados: 200, 422, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## PATCH /admin/listas-questoes/{lista_id}
+------------------------------------------
+Descricao: Atualiza parcialmente uma lista de questoes e, opcionalmente,
+substitui completamente seus itens.
+
+Parametros de rota:
+  - lista_id: UUID (obrigatorio)
+
+Schema Pydantic do body: ListaQuestoesEditar (todos os campos opcionais):
+  - titulo: str | None, se enviado: Field(min_length=2, max_length=150)
+  - descricao: str | None
+  - tipo_prova_id: UUID | None
+  - materia_id: UUID | None
+  - topico_id: UUID | None
+  - dificuldade: Literal["facil", "medio", "dificil"] | None
+  - tipo_lista: Literal["fixa", "gerada_ia", "questoes_erradas", "favoritas",
+    "revisao"] | None
+  - itens: list[ItemListaCriar] | None
+
+Body esperado (qualquer subconjunto):
+{
+    "titulo": "string",
+    "descricao": "string | null",
+    "tipo_prova_id": "uuid | null",
+    "materia_id": "uuid | null",
+    "topico_id": "uuid | null",
+    "dificuldade": "facil" | "medio" | "dificil" | null,
+    "tipo_lista": "fixa" | "gerada_ia" | "questoes_erradas" | "favoritas" | "revisao",
+    "itens": [
+        { "questao_id": "uuid", "ordem": 0 }
+    ]
+}
+
+Logica do endpoint (editar_lista):
+  1. SELECT id FROM listas_questoes WHERE id = lista_id LIMIT 1. Se nao
+     existir -> 404 "Lista de questões não encontrada".
+  2. alteracoes = dados.model_dump(exclude_unset=True, exclude={"itens"}).
+  3. Se "alteracoes" vazio E dados.itens for None -> 400 "Nenhuma alteração
+     foi enviada".
+  4. Se "titulo" em alteracoes, aplica .strip().
+  5. Converte para string (quando presentes e nao nulos): tipo_prova_id,
+     materia_id, topico_id.
+  6. Se "alteracoes" nao vazio, UPDATE listas_questoes SET ... WHERE id =
+     lista_id.
+  7. Se dados.itens nao for None: exclui todos os itens atuais (DELETE FROM
+     itens_lista_questoes WHERE lista_questoes_id = lista_id) e insere os
+     novos via salvar_itens (mesma logica do POST).
+  8. Retorna montar_lista(lista_id).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Lista de questões atualizada com sucesso",
+    "lista": { ... mesma estrutura do GET /admin/listas-questoes/{id} ... }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Lista de questões não encontrada" }
+  - 400 -> { "detail": "Nenhuma alteração foi enviada" }
+  - 422 -> erro de validacao Pydantic
+  - 500 -> { "detail": "Erro ao atualizar lista de questões" }
+
+Status HTTP utilizados: 200, 400, 404, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+------------------------------------------
+## DELETE /admin/listas-questoes/{lista_id}
+------------------------------------------
+Descricao: Exclui uma lista de questoes e todos os seus itens.
+
+Parametros de rota:
+  - lista_id: UUID (obrigatorio)
+
+Logica do endpoint (excluir_lista):
+  1. SELECT id FROM listas_questoes WHERE id = lista_id LIMIT 1. Se nao
+     existir -> 404 "Lista de questões não encontrada".
+  2. DELETE FROM itens_lista_questoes WHERE lista_questoes_id = lista_id.
+  3. DELETE FROM listas_questoes WHERE id = lista_id.
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Lista de questões excluída com sucesso"
+}
+
+Response de erro:
+  - 404 -> { "detail": "Lista de questões não encontrada" }
+  - 500 -> { "detail": "Erro ao excluir lista de questões" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+==========================================
+# Itens da Lista
+==========================================
+
+NAO existe um router dedicado exclusivamente a "Itens da Lista"; os itens sao
+gerenciados dentro do router routers/admin/listas_questoes.py, atraves de
+rotas aninhadas sob /admin/listas-questoes/{lista_id}/itens, alem das funcoes
+internas montar_lista, salvar_itens e excluir_itens (ja descritas na secao
+"Listas de Questões" acima, usadas pelo POST/PATCH/GET/DELETE de listas).
+
+------------------------------------------
+## POST /admin/listas-questoes/{lista_id}/itens
+------------------------------------------
+Descricao: Adiciona uma unica questao a uma lista existente, em uma posicao
+(ordem) especifica.
+
+Parametros de rota:
+  - lista_id: UUID (obrigatorio)
+
+Schema Pydantic do body: ItemListaAdicionar (schemas/questoes_schema.py)
+  - questao_id: UUID, obrigatorio
+  - ordem: int, opcional, default 0, Field(ge=0)
+
+Body esperado:
+{
+    "questao_id": "uuid",
+    "ordem": 0
+}
+
+Logica do endpoint (adicionar_item):
+  1. SELECT id FROM listas_questoes WHERE id = lista_id LIMIT 1. Se nao
+     existir -> 404 "Lista de questões não encontrada".
+  2. SELECT id FROM questoes WHERE id = questao_id LIMIT 1. Se nao existir ->
+     404 "Questão não encontrada".
+  3. SELECT id FROM itens_lista_questoes WHERE lista_questoes_id = lista_id
+     AND questao_id = questao_id LIMIT 1. Se ja existir -> 409 "Essa questão
+     já está nessa lista".
+  4. INSERT em itens_lista_questoes com
+     { "lista_questoes_id": str(lista_id), "questao_id": str(questao_id),
+       "ordem": ordem }.
+  5. Retorna montar_lista(lista_id) (a lista completa, ja com o novo item).
+
+Response de sucesso (o codigo nao define status_code customizado, portanto o
+FastAPI retorna o status default 200):
+{
+    "sucesso": true,
+    "mensagem": "Questão adicionada à lista com sucesso",
+    "lista": { ... mesma estrutura do GET /admin/listas-questoes/{id} ... }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Lista de questões não encontrada" }
+  - 404 -> { "detail": "Questão não encontrada" }
+  - 409 -> { "detail": "Essa questão já está nessa lista" }
+  - 422 -> erro de validacao Pydantic (questao_id ausente/invalido, ordem
+    negativa)
+  - 500 -> { "detail": "Erro ao adicionar questão à lista" }
+
+Status HTTP utilizados: 200, 404, 409, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+------------------------------------------
+## DELETE /admin/listas-questoes/{lista_id}/itens/{questao_id}
+------------------------------------------
+Descricao: Remove uma unica questao de uma lista.
+
+Parametros de rota:
+  - lista_id: UUID (obrigatorio)
+  - questao_id: UUID (obrigatorio)
+
+Payload: nao se aplica (DELETE sem body).
+
+Logica do endpoint (remover_item):
+  1. SELECT id FROM itens_lista_questoes WHERE lista_questoes_id = lista_id
+     AND questao_id = questao_id LIMIT 1. Se nao existir -> 404 "Questão não
+     encontrada nessa lista".
+     OBS: nao ha verificacao separada de existencia da propria lista; a
+     checagem do item ja cobre implicitamente esse caso (se a lista nao
+     existir, tambem nao havera item, retornando o mesmo 404).
+  2. DELETE FROM itens_lista_questoes WHERE lista_questoes_id = lista_id AND
+     questao_id = questao_id.
+  3. Retorna montar_lista(lista_id) (a lista atualizada, sem o item
+     removido).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Questão removida da lista com sucesso",
+    "lista": { ... mesma estrutura do GET /admin/listas-questoes/{id} ... }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Questão não encontrada nessa lista" }
+  - 500 -> { "detail": "Erro ao remover questão da lista" }
+
+Status HTTP utilizados: 200, 404, 500, alem dos de autenticacao/autorizacao.
+
+
+------------------------------------------
+## PATCH /admin/listas-questoes/{lista_id}/itens/ordem
+------------------------------------------
+Descricao: Reordena, em lote, um ou mais itens de uma lista (preserva a
+associacao lista-questao, apenas altera a coluna "ordem" de cada item
+informado).
+
+Parametros de rota:
+  - lista_id: UUID (obrigatorio)
+
+Schema Pydantic do body: ItensListaReordenarLote (schemas/questoes_schema.py)
+  - itens: list[ItemListaReordenar], obrigatorio, Field(min_length=1)
+
+Schema Pydantic ItemListaReordenar (usado dentro de "itens"):
+  - questao_id: UUID, obrigatorio
+  - ordem: int, obrigatorio, Field(ge=0)
+
+Body esperado:
+{
+    "itens": [
+        { "questao_id": "uuid", "ordem": 0 },
+        { "questao_id": "uuid", "ordem": 1 },
+        { "questao_id": "uuid", "ordem": 2 }
+    ]
+}
+
+Campos obrigatorios: itens (lista com no minimo 1 item; cada item exige
+questao_id e ordem).
+
+Logica do endpoint (reordenar_itens):
+  1. SELECT id FROM listas_questoes WHERE id = lista_id LIMIT 1. Se nao
+     existir -> 404 "Lista de questões não encontrada".
+  2. Para cada item em dados.itens (processado sequencialmente, um UPDATE por
+     item):
+     UPDATE itens_lista_questoes SET ordem = item.ordem WHERE
+     lista_questoes_id = lista_id AND questao_id = item.questao_id.
+     Se esse UPDATE especifico nao retornar dados (ou seja, a questao
+     informada nao pertence a essa lista) -> 404 "Questão {item.questao_id}
+     não encontrada nessa lista" (interrompe o loop no primeiro item invalido
+     encontrado; itens anteriores no mesmo lote ja podem ter sido
+     atualizados, pois cada UPDATE e executado individualmente e nao ha
+     transacao envolvendo todos os itens do lote).
+  3. Retorna montar_lista(lista_id) (a lista com a nova ordenacao).
+
+Response de sucesso (200):
+{
+    "sucesso": true,
+    "mensagem": "Ordem da lista atualizada com sucesso",
+    "lista": { ... mesma estrutura do GET /admin/listas-questoes/{id} ... }
+}
+
+Response de erro:
+  - 404 -> { "detail": "Lista de questões não encontrada" }
+  - 404 -> { "detail": "Questão {questao_id} não encontrada nessa lista" }
+    (questao_id concreto interpolado na mensagem)
+  - 422 -> erro de validacao Pydantic (lista "itens" vazia, campos ausentes
+    ou invalidos)
+  - 500 -> { "detail": "Erro ao reordenar itens da lista" }
+
+Status HTTP utilizados: 200, 404, 422, 500, alem dos de
+autenticacao/autorizacao.
+
+
+==========================================
+OBSERVACOES GERAIS SOBRE OS 4 MODULOS
+==========================================
+
+1. Nenhuma das tabelas deste dominio (tipos_prova, questoes, listas_questoes,
+   itens_lista_questoes, alternativas_questao) possui uso de slug em rotas de
+   busca individual, exceto "tipos_prova" que possui coluna slug no banco mas
+   ainda assim e buscada por id (nao ha rota GET/PATCH por slug neste
+   dominio). O slug de tipos_prova e apenas gerado/validado internamente
+   (unicidade) nas rotas de criacao/edicao.
+
+2. Todos os 4 routers usam exclusivamente supabase_admin.table(...) para
+   acesso a dados, sem SQLAlchemy, sem camada de repositorio/service, com
+   toda a logica dentro das proprias funcoes de rota (e helpers privados no
+   mesmo arquivo), seguindo o mesmo padrao dos modulos de Materias, Topicos e
+   Aulas.
+
+3. Todas as rotas usam try/except, retornando HTTPException com status_code
+   e "detail" em caso de erro, e todos os responses de sucesso seguem o
+   padrao { "sucesso": true, ... }.
+
+4. Paginacao: todos os endpoints de listagem (GET "" de tipos_prova,
+   questoes e listas_questoes) seguem o mesmo padrao: query params "pagina"
+   (default 1, ge=1) e "limite" (default 6, ge=1, le=50), calculo de
+   inicio/fim via .range(), uso de count="exact" no select, e calculo de
+   total_paginas = max(1, ceil(total_registros/limite)).
+
+5. Nenhuma rota deste dominio implementa exclusao em cascata manual alem do
+   necessario para respeitar FKs sem "on delete cascade" a nivel de
+   aplicacao: exclusao de questao remove suas alternativas e zera
+   alternativa_correta antes; exclusao de lista remove seus itens antes.
+   As demais FKs (aula_id, materia_id, topico_id, tipo_prova_id em questoes e
+   listas_questoes) usam "on delete set null" ou "on delete cascade" definidos
+   diretamente no banco (conforme DDL fornecido), portanto nao exigem logica
+   adicional no codigo Python.

@@ -4,6 +4,9 @@ from routers import auth, usuarios, materias, questoes
 from routers.admin import materias as admin_materias
 from routers.admin import topicos as admin_topicos
 from routers.admin import aulas as admin_aulas
+from routers.admin import questoes as admin_questoes
+from routers.admin import tipos_prova as admin_tipos_prova
+from routers.admin import listas_questoes as admin_listas_questoes
 
 app = FastAPI()
 
@@ -23,6 +26,9 @@ app.include_router(usuarios.router)
 app.include_router(admin_materias.router)
 app.include_router(admin_topicos.router)
 app.include_router(admin_aulas.router)
+app.include_router(admin_questoes.router)
+app.include_router(admin_tipos_prova.router)
+app.include_router(admin_listas_questoes.router)
 # app.include_router(materias.router)
 # app.include_router(questoes.router)
 
