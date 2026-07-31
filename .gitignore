@@ -40,3 +40,6 @@ Thumbs.db
 
 
 node_modules/
+
+# Runtime local data
+dados_configuracoes.json
