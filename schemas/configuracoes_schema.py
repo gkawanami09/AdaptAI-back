@@ -12,11 +12,6 @@ class ConfiguracoesGeraisEditar(BaseModel):
     tema: Literal["claro", "escuro"] | None = None
 
 
-class UsuarioEditar(BaseModel):
-    cargo: Literal["admin", "editor", "suporte", "aluno"] | None = None
-    status: Literal["ativo", "inativo"] | None = None
-
-
 class ConfiguracoesAutenticacaoEditar(BaseModel):
     tempo_sessao_min: int | None = Field(default=None, ge=1)
     login_google_ativo: bool | None = None
