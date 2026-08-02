@@ -10,6 +10,7 @@ from routers.admin import listas_questoes as admin_listas_questoes
 from routers.admin import relatorios as admin_relatorios
 from routers.admin import configuracoes as admin_configuracoes
 from routers.admin import usuarios as admin_usuarios
+from routers.admin import dashboard as admin_dashboard
 
 app = FastAPI()
 
@@ -36,6 +37,7 @@ app.include_router(admin_listas_questoes.router)
 app.include_router(admin_relatorios.router)
 app.include_router(admin_configuracoes.router)
 app.include_router(admin_usuarios.router)
+app.include_router(admin_dashboard.router)
 # app.include_router(materias.router)
 # app.include_router(questoes.router)
 
