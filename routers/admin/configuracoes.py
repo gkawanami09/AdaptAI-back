@@ -23,7 +23,10 @@ router = APIRouter(
 )
 
 # TODO: migrate to a "configuracoes" (key/value) table in Supabase; currently persisted to a local file
-CAMINHO_CONFIGURACOES = os.path.join(os.path.dirname(__file__), "..", "..", "dados_configuracoes.json")
+CAMINHO_CONFIGURACOES = os.getenv(
+    "CONFIG_DATA_PATH",
+    os.path.join(os.path.dirname(__file__), "..", "..", "dados_configuracoes.json"),
+)
 
 CONFIGURACOES_PADRAO = {
     "gerais": {
@@ -124,6 +127,8 @@ def carregar_configuracoes():
 
 # Writes the entire configuration dictionary to the file
 def salvar_configuracoes(configuracoes: dict):
+    diretorio = os.path.dirname(os.path.abspath(CAMINHO_CONFIGURACOES))
+    os.makedirs(diretorio, exist_ok=True)
     with open(CAMINHO_CONFIGURACOES, "w", encoding="utf-8") as arquivo:
         json.dump(configuracoes, arquivo, ensure_ascii=False, indent=2)
 
