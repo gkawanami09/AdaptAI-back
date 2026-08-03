@@ -66,3 +66,48 @@ class DashboardAlerta(BaseModel):
     descricao: str
     detalhe: Optional[str] = None
     link: str
+
+
+class ResumoAlunoDashboard(BaseModel):
+    tempo_estudado_min: int
+    tarefas_concluidas: int
+    tarefas_totais: int
+    xp_semana: int
+    ofensiva_dias: int
+
+
+class EvolucaoSemanalDia(BaseModel):
+    dia_semana: Literal["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+    percentual: int
+
+
+class DesempenhoMateriaAluno(BaseModel):
+    materia_id: UUID
+    materia: str
+    percentual: int
+    cor: Literal["teal", "gold", "red", "blue", "green", "purple"]
+
+
+class PlanoDoDiaItem(BaseModel):
+    id: UUID
+    icone: str
+    materia: str
+    materia_cor: str
+    status: Literal["concluido", "em-andamento", "nao-iniciado"]
+    titulo: str
+    duracao_min: int
+    progresso: Optional[int] = None
+
+
+class AlertaAlunoDashboard(BaseModel):
+    id: UUID
+    titulo: str
+    mensagem: str
+
+
+class AlunoDashboardResponse(BaseModel):
+    resumo: ResumoAlunoDashboard
+    evolucao_semanal: list[EvolucaoSemanalDia]
+    desempenho_por_materia: list[DesempenhoMateriaAluno]
+    plano_do_dia: list[PlanoDoDiaItem]
+    alertas: list[AlertaAlunoDashboard]
