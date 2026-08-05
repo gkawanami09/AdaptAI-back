@@ -233,6 +233,7 @@ CREATE TABLE public.listas_questoes (
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
   criado_por uuid,
+  slug text NOT NULL,
   CONSTRAINT listas_questoes_pkey PRIMARY KEY (id),
   CONSTRAINT listas_questoes_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.perfis(id),
   CONSTRAINT listas_questoes_tipo_prova_id_fkey FOREIGN KEY (tipo_prova_id) REFERENCES public.tipos_prova(id),
@@ -578,7 +579,8 @@ CREATE TABLE public.aulas_video (
   video_link character varying NOT NULL,
   descricao character varying,
   aulas_conteudo_id uuid NOT NULL DEFAULT gen_random_uuid(),
-  CONSTRAINT aulas_video_pkey PRIMARY KEY (id)
+  CONSTRAINT aulas_video_pkey PRIMARY KEY (id),
+  CONSTRAINT aulas_video_aulas_conteudo_id_fkey FOREIGN KEY (aulas_conteudo_id) REFERENCES public.aulas_conteudo(id)
 );
 CREATE TABLE public.aulas_texto (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

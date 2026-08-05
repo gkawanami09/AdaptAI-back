@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from database import supabase_admin
 from uuid import UUID
 from utils.autenticacao import exigir_administrador
+from utils.textos import gerar_slug
 from schemas.questoes_schema import (
     ListaQuestoesCriar,
     ListaQuestoesEditar,
@@ -66,6 +67,28 @@ def excluir_itens(lista_id: UUID):
     supabase_admin.table("itens_lista_questoes").delete().eq(
         "lista_questoes_id", str(lista_id)
     ).execute()
+
+
+# Gera um slug único para a lista a partir do título
+def gerar_slug_unico(titulo: str, lista_id: UUID | None = None):
+    slug_base = gerar_slug(titulo)
+    slug = slug_base
+    sufixo = 1
+
+    while True:
+        consulta = (
+            supabase_admin.table("listas_questoes")
+            .select("id")
+            .eq("slug", slug)
+        )
+        if lista_id:
+            consulta = consulta.neq("id", str(lista_id))
+
+        if not consulta.limit(1).execute().data:
+            return slug
+
+        sufixo += 1
+        slug = f"{slug_base}-{sufixo}"
 
 
 def filtrar_listas(consulta, busca, materia_id, tipo_lista):
@@ -175,6 +198,7 @@ def criar_lista(dados: ListaQuestoesCriar):
         nova_lista["materia_id"] = str(dados.materia_id) if dados.materia_id else None
         nova_lista["topico_id"] = str(dados.topico_id) if dados.topico_id else None
         nova_lista["titulo"] = dados.titulo.strip()
+        nova_lista["slug"] = gerar_slug_unico(nova_lista["titulo"])
 
         resposta = (
             supabase_admin.table("listas_questoes")
@@ -237,6 +261,7 @@ def editar_lista(lista_id: UUID, dados: ListaQuestoesEditar):
 
         if "titulo" in alteracoes:
             alteracoes["titulo"] = alteracoes["titulo"].strip()
+            alteracoes["slug"] = gerar_slug_unico(alteracoes["titulo"], lista_id)
 
         if "tipo_prova_id" in alteracoes and alteracoes["tipo_prova_id"] is not None:
             alteracoes["tipo_prova_id"] = str(alteracoes["tipo_prova_id"])

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS
-from routers import auth, usuarios, materias, questoes, onboarding, dashboard, plano_estudos, biblioteca_aulas, aula_visualizacao
+from routers import auth, usuarios, materias, questoes, onboarding, dashboard, plano_estudos, biblioteca_aulas, aula_visualizacao, banco_questoes, visualizacao_questoes, simulados, progresso, conquistas, configuracoes_aluno
 from routers.admin import materias as admin_materias
 from routers.admin import topicos as admin_topicos
 from routers.admin import aulas as admin_aulas
@@ -40,6 +40,12 @@ app.include_router(dashboard.router)
 app.include_router(plano_estudos.router)
 app.include_router(aula_visualizacao.router)
 app.include_router(biblioteca_aulas.router)
+app.include_router(banco_questoes.router)
+app.include_router(visualizacao_questoes.router)
+app.include_router(simulados.router)
+app.include_router(progresso.router)
+app.include_router(conquistas.router)
+app.include_router(configuracoes_aluno.router)
 # app.include_router(materias.router)
 # app.include_router(questoes.router)
 
