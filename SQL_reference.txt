@@ -233,7 +233,7 @@ CREATE TABLE public.listas_questoes (
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
   criado_por uuid,
-  slug text NOT NULL,
+  slug text NOT NULL UNIQUE,
   CONSTRAINT listas_questoes_pkey PRIMARY KEY (id),
   CONSTRAINT listas_questoes_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.perfis(id),
   CONSTRAINT listas_questoes_tipo_prova_id_fkey FOREIGN KEY (tipo_prova_id) REFERENCES public.tipos_prova(id),
@@ -276,6 +276,7 @@ CREATE TABLE public.modelos_simulado (
   ativo boolean NOT NULL DEFAULT true,
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
+  slug text NOT NULL UNIQUE,
   CONSTRAINT modelos_simulado_pkey PRIMARY KEY (id),
   CONSTRAINT modelos_simulado_tipo_prova_id_fkey FOREIGN KEY (tipo_prova_id) REFERENCES public.tipos_prova(id)
 );
@@ -360,6 +361,10 @@ CREATE TABLE public.temas_redacao (
   ativo boolean NOT NULL DEFAULT true,
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
+  slug text NOT NULL UNIQUE,
+  tag text NOT NULL,
+  tag_cor text NOT NULL CHECK (tag_cor = ANY (ARRAY['purple'::text, 'green'::text, 'blue'::text, 'teal'::text, 'gold'::text, 'red'::text, 'gray'::text])),
+  dica_ada text,
   CONSTRAINT temas_redacao_pkey PRIMARY KEY (id),
   CONSTRAINT temas_redacao_tipo_prova_id_fkey FOREIGN KEY (tipo_prova_id) REFERENCES public.tipos_prova(id)
 );
@@ -371,7 +376,7 @@ CREATE TABLE public.redacoes_enviadas (
   texto text NOT NULL DEFAULT ''::text,
   total_palavras integer CHECK (total_palavras >= 0),
   total_caracteres integer CHECK (total_caracteres >= 0),
-  status text NOT NULL DEFAULT 'rascunho'::text CHECK (status = ANY (ARRAY['rascunho'::text, 'enviada'::text, 'corrigida'::text])),
+  status text NOT NULL DEFAULT 'pendente'::text CHECK (status = ANY (ARRAY['pendente'::text, 'corrigindo'::text, 'corrigida'::text, 'erro'::text, 'rascunho'::text, 'enviada'::text])),
   nota_total integer CHECK (nota_total >= 0 AND nota_total <= 1000),
   feedback_geral text,
   sugestao_melhoria text,
@@ -591,4 +596,41 @@ CREATE TABLE public.aulas_texto (
   aulas_conteudo_id uuid NOT NULL DEFAULT gen_random_uuid(),
   CONSTRAINT aulas_texto_pkey PRIMARY KEY (id),
   CONSTRAINT aulas_texto_aulas_conteudo_id_fkey FOREIGN KEY (aulas_conteudo_id) REFERENCES public.aulas_conteudo(id)
+);
+CREATE TABLE public.progresso_lista_questoes_aluno (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  usuario_id uuid NOT NULL,
+  lista_questoes_id uuid NOT NULL,
+  status text NOT NULL DEFAULT 'em_andamento'::text CHECK (status = ANY (ARRAY['em_andamento'::text, 'finalizada'::text])),
+  iniciado_em timestamp with time zone NOT NULL DEFAULT now(),
+  concluido_em timestamp with time zone,
+  atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT progresso_lista_questoes_aluno_pkey PRIMARY KEY (id),
+  CONSTRAINT progresso_lista_questoes_aluno_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.perfis(id),
+  CONSTRAINT progresso_lista_questoes_aluno_lista_questoes_id_fkey FOREIGN KEY (lista_questoes_id) REFERENCES public.listas_questoes(id)
+);
+CREATE TABLE public.respostas_lista_questoes_aluno (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  usuario_id uuid NOT NULL,
+  lista_questoes_id uuid NOT NULL,
+  questao_id uuid NOT NULL,
+  alternativa_selecionada_id uuid NOT NULL,
+  correta boolean NOT NULL,
+  respondido_em timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT respostas_lista_questoes_aluno_pkey PRIMARY KEY (id),
+  CONSTRAINT respostas_lista_questoes_aluno_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.perfis(id),
+  CONSTRAINT respostas_lista_questoes_aluno_lista_questoes_id_fkey FOREIGN KEY (lista_questoes_id) REFERENCES public.listas_questoes(id),
+  CONSTRAINT respostas_lista_questoes_aluno_questao_id_fkey FOREIGN KEY (questao_id) REFERENCES public.questoes(id),
+  CONSTRAINT respostas_lista_questoes_aluno_alternativa_fkey FOREIGN KEY (alternativa_selecionada_id) REFERENCES public.alternativas_questao(id)
+);
+CREATE TABLE public.competencias_redacao (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  tema_redacao_id uuid NOT NULL,
+  number integer NOT NULL CHECK (number >= 1 AND number <= 5),
+  title text NOT NULL,
+  description text NOT NULL,
+  color text NOT NULL CHECK (color = ANY (ARRAY['blue'::text, 'teal'::text, 'purple'::text, 'gold'::text, 'red'::text])),
+  criado_em timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT competencias_redacao_pkey PRIMARY KEY (id),
+  CONSTRAINT competencias_redacao_tema_redacao_id_fkey FOREIGN KEY (tema_redacao_id) REFERENCES public.temas_redacao(id)
 );
