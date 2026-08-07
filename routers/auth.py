@@ -26,26 +26,37 @@ async def registro(
     try:
         nome= nome.strip()
         email= email.strip().lower()
-        
+
         senha_valida, mensagem_senha = validar_senha_forte(senha)
         if not senha_valida:
             raise HTTPException(
                 status_code= 400,
                 detail= mensagem_senha
             )
-            
+
         if senha != conf_senha:
             raise HTTPException(
                 status_code= 400,
                 detail='As senhas digitadas não coincidem'
             )
+
+        # `perfis` não guarda email (só existe em auth.users, gerenciado
+        # pelo Supabase Auth) — por isso a checagem de duplicidade
+        # precisa ser feita pela Admin API de auth, não pela tabela.
+        usuarios_existentes = supabase_admin.auth.admin.list_users()
+        if any(u.email and u.email.lower() == email for u in usuarios_existentes):
+            raise HTTPException(
+                status_code=409,
+                detail="Já existe uma conta cadastrada com esse email."
+            )
+
         auth_response = supabase.auth.sign_up({
             'email' : email,
             'password' : senha
         })
-        
-        id_usuario = auth_response.user.id
-        
+
+        id_usuario = auth_response.user.id if auth_response.user else None
+
         if not id_usuario:
             raise HTTPException(
                 status_code= 400,
