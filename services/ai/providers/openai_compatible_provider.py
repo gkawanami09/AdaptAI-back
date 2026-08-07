@@ -61,7 +61,25 @@ class OpenAICompatibleProvider(AIProvider):
         return extrair_e_validar_json(conteudo, AvaliacaoArgumentativaIA)
 
     def responder_chat(self, mensagens: list[dict], contexto: dict | None = None) -> str:
-        raise NotImplementedError("IA ainda não implementada")
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
+        try:
+            resposta = httpx.post(
+                f"{self._base_url}/v1/chat/completions",
+                json={
+                    "model": self._model,
+                    "messages": mensagens,
+                    "max_tokens": self._max_tokens,
+                    "temperature": self._temperature,
+                },
+                headers=headers,
+                timeout=self._timeout,
+            )
+            resposta.raise_for_status()
+        except httpx.HTTPError as erro:
+            raise AIIndisponivelError(f"Falha ao chamar o servidor de inferência: {erro}") from erro
+
+        return resposta.json()["choices"][0]["message"]["content"]
 
     def gerar_feedback(self, texto: str, contexto: dict | None = None) -> str:
         raise NotImplementedError("IA ainda não implementada")

@@ -39,6 +39,13 @@ class AIProvider(ABC):
 
     @abstractmethod
     def responder_chat(self, mensagens: list[dict], contexto: dict | None = None) -> str:
+        """Gera a resposta da Ada para uma conversa de chat.
+
+        `mensagens` é a lista de mensagens no formato {"role", "content"}
+        já montada pelo ChatContextBuilder (system + histórico + mensagem
+        nova do usuário). `contexto` é reservado para informações extras
+        sobre o aluno/conversa que futuras ferramentas possam precisar.
+        """
         raise NotImplementedError
 
     @abstractmethod

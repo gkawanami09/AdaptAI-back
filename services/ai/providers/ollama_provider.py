@@ -50,7 +50,25 @@ class OllamaProvider(AIProvider):
         return extrair_e_validar_json(conteudo, AvaliacaoArgumentativaIA)
 
     def responder_chat(self, mensagens: list[dict], contexto: dict | None = None) -> str:
-        raise NotImplementedError("IA ainda não implementada")
+        try:
+            resposta = httpx.post(
+                f"{self._base_url}/api/chat",
+                json={
+                    "model": self._model,
+                    "messages": mensagens,
+                    "stream": False,
+                    "options": {
+                        "temperature": self._temperature,
+                        "num_predict": self._max_tokens,
+                    },
+                },
+                timeout=self._timeout,
+            )
+            resposta.raise_for_status()
+        except httpx.HTTPError as erro:
+            raise AIIndisponivelError(f"Falha ao chamar o Ollama: {erro}") from erro
+
+        return resposta.json()["message"]["content"]
 
     def gerar_feedback(self, texto: str, contexto: dict | None = None) -> str:
         raise NotImplementedError("IA ainda não implementada")
