@@ -259,3 +259,45 @@ def test_aula_maior_que_tempo_diario_e_ignorada_sem_ultrapassar_limite():
     assert "a2" in todos_ids
     for dia in plano.dias:
         assert sum(s.duracao_minutos for s in dia.sessoes) <= 60
+
+
+def test_nao_repete_a_mesma_materia_mais_de_uma_vez_no_mesmo_dia():
+    # cenário exato do bug reportado: 1 matéria com 1 única aula, orçamento
+    # diário grande o bastante pra "caber" a mesma aula várias vezes como
+    # revisão (120 // 30 = 4 repetições) se não houvesse o limite por dia.
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=10))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": [_aula("a1", "matematica", "Aula única", 30)]},
+        tempo_por_dia_minutos=120,
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    for dia in plano.dias:
+        materias_no_dia = [s.materia for s in dia.sessoes]
+        assert len(materias_no_dia) == len(set(materias_no_dia)), (
+            f"matéria repetida no mesmo dia: {materias_no_dia}"
+        )
+        assert len(dia.sessoes) <= 1
+
+
+def test_nao_repete_materia_no_mesmo_dia_com_varias_materias_e_pouco_conteudo():
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=10))],
+        materias_selecionadas=["matematica", "fisica", "quimica"],
+        materias_por_prova={"enem": {"matematica", "fisica", "quimica"}},
+        aulas_por_materia={
+            "matematica": [_aula("a1", "matematica", "Aula mat", 30)],
+            "fisica": [],
+            "quimica": [],
+        },
+        tempo_por_dia_minutos=120,
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    for dia in plano.dias:
+        materias_no_dia = [s.materia for s in dia.sessoes]
+        assert len(materias_no_dia) == len(set(materias_no_dia))

@@ -13,6 +13,7 @@ from schemas.correcao_schema import RedacaoInput
 from services.ai.base import AIIndisponivelError, AIRespostaInvalidaError
 from services.ai.factory import get_ai_provider
 from services.correcao.orquestrador import CorrecaoOrquestrador
+from services.gamificacao import EventoGamificacao, registrar_evento_gamificacao
 
 COMPETENCIA_META = {
     1: ("Domínio da norma culta", "Gramática, ortografia e pontuação", "blue"),
@@ -53,7 +54,7 @@ def _mensagem_motivacional(nota_total: int) -> str:
     return "Continue treinando — cada redação é um passo para melhorar."
 
 
-def processar_correcao(envio_id: str, texto: str) -> None:
+def processar_correcao(envio_id: str, texto: str, usuario_id: str) -> None:
     try:
         supabase_admin.table("redacoes_enviadas").update({
             "status": "corrigindo",
@@ -129,6 +130,10 @@ def processar_correcao(envio_id: str, texto: str) -> None:
             "feedback_geral": avaliacao_ia.resumo_final,
             "analise_ia": analise_ia,
         }).eq("id", envio_id).execute()
+
+        registrar_evento_gamificacao(
+            usuario_id, EventoGamificacao.CORRECAO_REDACAO_CONCLUIDA, {"nota_total": nota_total}
+        )
 
     except (AIIndisponivelError, AIRespostaInvalidaError) as erro:
         print(f"Erro ao corrigir redação {envio_id}: {erro}")

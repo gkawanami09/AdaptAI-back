@@ -9,6 +9,7 @@ from schemas.redacao_schema import (
     GetRedacaoCorrecaoResponse,
 )
 from services.redacao_correcao_service import processar_correcao
+from services.gamificacao import EventoGamificacao, registrar_evento_gamificacao
 
 router = APIRouter(
     prefix='/aluno/redacao',
@@ -133,7 +134,8 @@ def enviar_redacao(
 
         registro = envio.data[0]
 
-        background_tasks.add_task(processar_correcao, registro["id"], dados.texto)
+        registrar_evento_gamificacao(str(usuario_atual.id), EventoGamificacao.REDACAO_ENVIADA)
+        background_tasks.add_task(processar_correcao, registro["id"], dados.texto, str(usuario_atual.id))
 
         return {
             "id": registro["id"],

@@ -4,6 +4,8 @@ from datetime import date, datetime, timezone
 from fastapi import HTTPException
 
 from database import supabase_admin
+from utils.data_brasil import hoje_brasil
+from services.plano_estudos.ai_generator import AIPlanGenerator
 from services.plano_estudos.contexto import AulaContexto, PlanoEstudosContexto, ProvaContexto
 from services.plano_estudos.deterministic_generator import DeterministicPlanGenerator
 from services.plano_estudos.generator_base import PlanoEstudosGenerator
@@ -15,13 +17,28 @@ class PlanoEstudosWizardService:
     """Orquestra o wizard de criação de plano de estudos: valida as
     preferências do aluno contra o catálogo de provas/matérias, busca o
     contexto real do banco (provas, matérias, aulas) e delega a
-    distribuição das sessões ao gerador injetado (determinístico hoje,
-    podendo ser substituído por um gerador com IA no futuro sem tocar
-    no router).
+    distribuição das sessões ao gerador.
+
+    O motor determinístico é o padrão — instantâneo, gratuito e sempre
+    correto (datas, limites diários etc. são garantidos em código). A
+    IA só é usada quando o aluno pede explicitamente (`usar_ia=True`),
+    e mesmo assim com fallback automático para o motor determinístico
+    se ela falhar. Trocar/ajustar geradores não exige nenhuma mudança
+    em router ou schema.
     """
 
-    def __init__(self, generator: PlanoEstudosGenerator | None = None):
-        self._generator = generator or DeterministicPlanGenerator()
+    def __init__(
+        self,
+        deterministic_generator: PlanoEstudosGenerator | None = None,
+        ai_generator: PlanoEstudosGenerator | None = None,
+    ):
+        self._deterministic_generator = deterministic_generator or DeterministicPlanGenerator()
+        self._ai_generator = ai_generator or AIPlanGenerator(fallback=self._deterministic_generator)
+
+    def _escolher_generator(self, dados) -> PlanoEstudosGenerator:
+        if getattr(dados, "usar_ia", False):
+            return self._ai_generator
+        return self._deterministic_generator
 
     def listar_opcoes(self) -> dict:
         provas = (
@@ -69,7 +86,7 @@ class PlanoEstudosWizardService:
             raise HTTPException(status_code=422, detail="; ".join(partes))
 
     def _montar_contexto(self, dados) -> PlanoEstudosContexto:
-        hoje = date.today()
+        hoje = hoje_brasil()
 
         provas_rows = (
             supabase_admin
@@ -230,6 +247,14 @@ class PlanoEstudosWizardService:
     def criar_plano(self, usuario_id: str, dados) -> dict:
         self._validar_slugs(dados.provas, dados.materias)
 
+        # Só pode existir um plano ativo por vez — sem isso, cada plano
+        # novo se soma aos anteriores em vez de substituí-los, e a mesma
+        # aula acaba aparecendo duplicada no mesmo dia na tela do aluno.
+        supabase_admin.table("planos_estudo").update({
+            "status": "arquivado",
+            "atualizado_em": datetime.now(timezone.utc).isoformat(),
+        }).eq("usuario_id", usuario_id).eq("status", "ativo").execute()
+
         novo_plano = (
             supabase_admin
             .table("planos_estudo")
@@ -237,7 +262,7 @@ class PlanoEstudosWizardService:
                 "usuario_id": usuario_id,
                 "titulo": "Plano de estudos",
                 "status": "ativo",
-                "criado_por": "sistema",
+                "criado_por": "ia" if dados.usar_ia else "sistema",
                 "provas_selecionadas": dados.provas,
                 "materias_selecionadas": dados.materias,
                 "tempo_por_dia_minutos": dados.tempo_por_dia_minutos,
@@ -269,7 +294,7 @@ class PlanoEstudosWizardService:
 
     def _gerar_e_persistir(self, plano_id: str, usuario_id: str, dados) -> None:
         contexto = self._montar_contexto(dados)
-        plano_gerado = self._generator.gerar(contexto)
+        plano_gerado = self._escolher_generator(dados).gerar(contexto)
 
         if plano_gerado.avisos:
             logger.info(
@@ -478,7 +503,7 @@ class PlanoEstudosWizardService:
         for sessao in plano.get("sessoes", []):
             dias_por_data.setdefault(sessao["data_agendada"], []).append(sessao)
 
-        data_inicio = date.fromisoformat(plano["data_inicio"]) if plano["data_inicio"] else date.today()
+        data_inicio = date.fromisoformat(plano["data_inicio"]) if plano["data_inicio"] else hoje_brasil()
 
         semanas_por_numero: dict[int, dict] = {}
         for data_iso in sorted(dias_por_data.keys()):

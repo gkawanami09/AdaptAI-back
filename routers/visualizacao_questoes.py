@@ -10,6 +10,8 @@ from schemas.visualizacao_questoes_schema import (
     FavoritarQuestaoResponse,
     FinalizarListaResponse,
 )
+from services.gamificacao import EventoGamificacao, registrar_evento_gamificacao
+from services.gamificacao.metricas import TIPOS_LISTA_REVISAO
 
 router = APIRouter(
     prefix='/aluno/questoes',
@@ -32,7 +34,7 @@ DIFICULDADE_COR = {
 def buscar_lista_por_slug(slug: str, usuario_id: str):
     resposta = (
         supabase_admin.table("listas_questoes")
-        .select("id, usuario_id, slug, titulo, materia_id, tipo_prova_id, dificuldade")
+        .select("id, usuario_id, slug, titulo, materia_id, tipo_prova_id, dificuldade, tipo_lista")
         .eq("slug", slug)
         .limit(1)
         .execute()
@@ -305,7 +307,7 @@ def responder_questao(
 
         questao = (
             supabase_admin.table("questoes")
-            .select("id, alternativa_correta")
+            .select("id, alternativa_correta, materia_id")
             .eq("id", str(questao_id))
             .limit(1)
             .execute()
@@ -357,6 +359,15 @@ def responder_questao(
             }).execute()
 
         garantir_progresso(id_usuario, lista["id"])
+
+        materia_id = questao.data[0]["materia_id"]
+        registrar_evento_gamificacao(id_usuario, EventoGamificacao.QUESTAO_RESPONDIDA)
+        if correta:
+            registrar_evento_gamificacao(
+                id_usuario, EventoGamificacao.QUESTAO_ACERTADA, {"materia_id": materia_id}
+            )
+            if lista.get("tipo_lista") in TIPOS_LISTA_REVISAO:
+                registrar_evento_gamificacao(id_usuario, EventoGamificacao.REVISAO_QUESTAO_CONCLUIDA)
 
         itens = buscar_itens_lista(lista["id"])
         ids_questoes = [i["questao_id"] for i in itens]

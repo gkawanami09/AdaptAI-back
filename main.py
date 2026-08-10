@@ -12,6 +12,9 @@ from routers.admin import relatorios as admin_relatorios
 from routers.admin import configuracoes as admin_configuracoes
 from routers.admin import usuarios as admin_usuarios
 from routers.admin import dashboard as admin_dashboard
+from routers.admin import conquistas as admin_conquistas
+from routers.admin import missoes as admin_missoes
+from routers.admin import gamificacao as admin_gamificacao
 
 app = FastAPI()
 
@@ -36,6 +39,9 @@ app.include_router(admin_relatorios.router)
 app.include_router(admin_configuracoes.router)
 app.include_router(admin_usuarios.router)
 app.include_router(admin_dashboard.router)
+app.include_router(admin_conquistas.router)
+app.include_router(admin_missoes.router)
+app.include_router(admin_gamificacao.router)
 app.include_router(dashboard.router)
 app.include_router(plano_estudos.router)
 app.include_router(aula_visualizacao.router)

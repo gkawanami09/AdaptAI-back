@@ -1,5 +1,5 @@
 from collections import deque
-from datetime import date, timedelta
+from datetime import date
 
 from services.plano_estudos.contexto import (
     AulaContexto,
@@ -10,6 +10,7 @@ from services.plano_estudos.contexto import (
     SessaoGerada,
 )
 from services.plano_estudos.generator_base import PlanoEstudosGenerator
+from services.plano_estudos.periodo import calcular_periodo, dias_calendario
 
 PESO_PROVA_SEM_DATA = 0.2
 # Deve ficar sempre abaixo de 1/dias_ate para qualquer prova real, mesmo
@@ -59,27 +60,8 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
     """
 
     def gerar(self, contexto: PlanoEstudosContexto) -> PlanoGerado:
-        avisos: list[str] = []
         hoje = contexto.data_inicio
-
-        provas_validas: list[tuple[ProvaContexto, date]] = []
-        for prova in contexto.provas:
-            if prova.data_prova is None:
-                avisos.append(f"Prova '{prova.slug}' sem data cadastrada — ignorada na priorização por proximidade.")
-                continue
-            if prova.data_prova <= hoje:
-                avisos.append(f"Prova '{prova.slug}' já ocorreu — ignorada na geração do cronograma.")
-                continue
-            provas_validas.append((prova, prova.data_prova))
-
-        if provas_validas:
-            periodo_fim = max(data_prova for _, data_prova in provas_validas)
-        else:
-            periodo_fim = hoje + timedelta(weeks=contexto.duracao_maxima_semanas)
-            avisos.append(
-                "Nenhuma prova selecionada possui data válida — usando período padrão de "
-                f"{contexto.duracao_maxima_semanas} semanas."
-            )
+        periodo_fim, provas_validas, avisos = calcular_periodo(contexto)
 
         materias_ordenadas = self._priorizar_materias(contexto, provas_validas, hoje)
 
@@ -103,7 +85,7 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
         historico: dict[str, list[AulaContexto]] = {materia: [] for materia in materias_ordenadas}
 
         dias_gerados: list[DiaGerado] = []
-        for dia in self._dias_calendario(hoje, periodo_fim, contexto.dias_estudo):
+        for dia in dias_calendario(hoje, periodo_fim, contexto.dias_estudo):
             fase = _fase_do_dia(dia, provas_validas)
             sessoes = self._distribuir_dia(
                 fase, materias_ordenadas, filas, historico, contexto.tempo_por_dia_minutos
@@ -150,18 +132,6 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             key=lambda m: (-scores[m], contexto.materias_selecionadas.index(m)),
         )
 
-    def _dias_calendario(self, inicio: date, fim: date, dias_estudo: list[str]) -> list[date]:
-        dias_estudo_set = set(dias_estudo)
-        dias: list[date] = []
-        cursor = inicio
-
-        while cursor <= fim:
-            if cursor.strftime("%A").lower() in dias_estudo_set:
-                dias.append(cursor)
-            cursor += timedelta(days=1)
-
-        return dias
-
     def _distribuir_dia(
         self,
         fase: str,
@@ -173,21 +143,20 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
         if not materias_ordenadas:
             return []
 
+        # No máximo 1 sessão por matéria por dia — sem isso, uma matéria com
+        # pouco conteúdo (ou nenhum novo) acaba reaproveitando a mesma aula
+        # como revisão em todas as voltas do round-robin do dia, repetindo-a
+        # várias vezes seguidas sem nenhum ganho pedagógico.
         sessoes: list[SessaoGerada] = []
         restante = tempo_por_dia_minutos
-        indice = 0
-        sem_progresso = 0
-        rodada = 0
 
-        while restante > 0 and sem_progresso < len(materias_ordenadas):
-            materia = materias_ordenadas[indice % len(materias_ordenadas)]
-            indice += 1
-            rodada += 1
+        for materia in materias_ordenadas:
+            if restante <= 0:
+                break
 
             sessao = None
 
-            preferir_revisao = fase == "revisao" and rodada % 2 == 0 and historico[materia]
-            if preferir_revisao:
+            if fase == "revisao" and historico[materia]:
                 sessao = self._sessao_revisao(materia, historico, restante)
 
             if sessao is None and filas[materia] and filas[materia][0].duracao_minutos <= restante:
@@ -207,9 +176,6 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             if sessao is not None:
                 sessoes.append(sessao)
                 restante -= sessao.duracao_minutos
-                sem_progresso = 0
-            else:
-                sem_progresso += 1
 
         return sessoes
 

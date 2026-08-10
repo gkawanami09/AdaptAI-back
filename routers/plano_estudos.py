@@ -15,6 +15,7 @@ from schemas.plano_estudos_schema import (
     GetPlanoEstudosGeradoResponse,
 )
 from services.plano_estudos_wizard_service import PlanoEstudosWizardService
+from services.gamificacao import EventoGamificacao, conceder_xp_e_atividade, registrar_evento_gamificacao
 
 router = APIRouter(
     prefix='/aluno/plano-estudos',
@@ -173,29 +174,46 @@ def obter_plano_estudos(
         semana_inicio = data_referencia - timedelta(days=(data_referencia.weekday() + 1) % 7)
         semana_fim = semana_inicio + timedelta(days=6)
 
-        tarefas_periodo = (
+        ids_planos_ativos = [
+            p["id"] for p in
             supabase_admin
-            .table("tarefas_estudo")
-            .select("id, titulo, tipo_tarefa, data_agendada, duracao_minutos, status, materia_id")
+            .table("planos_estudo")
+            .select("id")
             .eq("usuario_id", id_usuario)
-            .gte("data_agendada", data_inicio.isoformat())
-            .lte("data_agendada", data_fim.isoformat())
-            .order("data_agendada")
-            .order("ordem")
+            .eq("status", "ativo")
             .execute()
             .data or []
-        )
+        ]
 
-        tarefas_semana = (
-            supabase_admin
-            .table("tarefas_estudo")
-            .select("id, tipo_tarefa, data_agendada, duracao_minutos, status, materia_id")
-            .eq("usuario_id", id_usuario)
-            .gte("data_agendada", semana_inicio.isoformat())
-            .lte("data_agendada", semana_fim.isoformat())
-            .execute()
-            .data or []
-        )
+        if ids_planos_ativos:
+            tarefas_periodo = (
+                supabase_admin
+                .table("tarefas_estudo")
+                .select("id, titulo, tipo_tarefa, data_agendada, duracao_minutos, status, materia_id")
+                .eq("usuario_id", id_usuario)
+                .in_("plano_estudo_id", ids_planos_ativos)
+                .gte("data_agendada", data_inicio.isoformat())
+                .lte("data_agendada", data_fim.isoformat())
+                .order("data_agendada")
+                .order("ordem")
+                .execute()
+                .data or []
+            )
+
+            tarefas_semana = (
+                supabase_admin
+                .table("tarefas_estudo")
+                .select("id, titulo, tipo_tarefa, data_agendada, duracao_minutos, status, materia_id")
+                .eq("usuario_id", id_usuario)
+                .in_("plano_estudo_id", ids_planos_ativos)
+                .gte("data_agendada", semana_inicio.isoformat())
+                .lte("data_agendada", semana_fim.isoformat())
+                .execute()
+                .data or []
+            )
+        else:
+            tarefas_periodo = []
+            tarefas_semana = []
 
         ids_materias = list({t["materia_id"] for t in (tarefas_periodo + tarefas_semana) if t["materia_id"]})
         materias = (
@@ -451,76 +469,12 @@ def concluir_tarefa(
             "atualizado_em": agora.isoformat(),
         }).eq("id", str(tarefa_id)).execute()
 
-        xp_ganho = 10
-        hoje = agora.date().isoformat()
         duracao = tarefa.data[0]["duracao_minutos"] or 0
 
-        atividade_hoje = (
-            supabase_admin
-            .table("atividade_diaria")
-            .select("id, minutos_estudo, xp_ganho, tarefas_concluidas")
-            .eq("usuario_id", id_usuario)
-            .eq("data_atividade", hoje)
-            .limit(1)
-            .execute()
+        conceder_xp_e_atividade(id_usuario, 10, minutos_estudo=duracao, agora=agora, tarefas_concluidas=1)
+        registrar_evento_gamificacao(
+            id_usuario, EventoGamificacao.SESSAO_ESTUDO_CONCLUIDA, {"minutos": duracao}
         )
-
-        if atividade_hoje.data:
-            registro = atividade_hoje.data[0]
-            supabase_admin.table("atividade_diaria").update({
-                "minutos_estudo": registro["minutos_estudo"] + duracao,
-                "xp_ganho": registro["xp_ganho"] + xp_ganho,
-                "tarefas_concluidas": registro["tarefas_concluidas"] + 1,
-                "atualizado_em": agora.isoformat(),
-            }).eq("id", registro["id"]).execute()
-        else:
-            supabase_admin.table("atividade_diaria").insert({
-                "usuario_id": id_usuario,
-                "data_atividade": hoje,
-                "minutos_estudo": duracao,
-                "xp_ganho": xp_ganho,
-                "tarefas_concluidas": 1,
-            }).execute()
-
-        estatisticas = (
-            supabase_admin
-            .table("estatisticas_usuario")
-            .select("usuario_id, xp_total, ofensiva_atual_dias, maior_ofensiva_dias, ultima_atividade_data, minutos_estudo_total")
-            .eq("usuario_id", id_usuario)
-            .limit(1)
-            .execute()
-        )
-
-        hoje_data = agora.date()
-
-        if estatisticas.data:
-            registro = estatisticas.data[0]
-            ultima_data = date.fromisoformat(registro["ultima_atividade_data"]) if registro["ultima_atividade_data"] else None
-
-            if ultima_data == hoje_data:
-                nova_ofensiva = registro["ofensiva_atual_dias"]
-            elif ultima_data == hoje_data - timedelta(days=1):
-                nova_ofensiva = registro["ofensiva_atual_dias"] + 1
-            else:
-                nova_ofensiva = 1
-
-            supabase_admin.table("estatisticas_usuario").update({
-                "xp_total": registro["xp_total"] + xp_ganho,
-                "ofensiva_atual_dias": nova_ofensiva,
-                "maior_ofensiva_dias": max(nova_ofensiva, registro["maior_ofensiva_dias"]),
-                "ultima_atividade_data": hoje_data.isoformat(),
-                "minutos_estudo_total": registro["minutos_estudo_total"] + duracao,
-                "atualizado_em": agora.isoformat(),
-            }).eq("usuario_id", id_usuario).execute()
-        else:
-            supabase_admin.table("estatisticas_usuario").insert({
-                "usuario_id": id_usuario,
-                "xp_total": xp_ganho,
-                "ofensiva_atual_dias": 1,
-                "maior_ofensiva_dias": 1,
-                "ultima_atividade_data": hoje_data.isoformat(),
-                "minutos_estudo_total": duracao,
-            }).execute()
 
         return {"sucesso": True}
 

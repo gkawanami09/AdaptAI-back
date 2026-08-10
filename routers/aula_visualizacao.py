@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from database import supabase_admin
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone
 from utils.autenticacao import pegar_usuario_atual
 from schemas.aula_visualizacao_schema import (
     AulaVisualizacaoResponse,
@@ -9,6 +9,7 @@ from schemas.aula_visualizacao_schema import (
     AtualizarConceitoAula,
     AtualizarConceitoAulaResponse,
 )
+from services.gamificacao import EventoGamificacao, conceder_xp_e_atividade, registrar_evento_gamificacao
 
 router = APIRouter(
     prefix='/aluno/aulas',
@@ -196,71 +197,6 @@ def montar_resposta_aula(aula: dict, id_usuario: str) -> dict:
     }
 
 
-def registrar_xp_e_ofensiva(id_usuario: str, xp_ganho: int, duracao: int, agora: datetime):
-    hoje = agora.date().isoformat()
-
-    atividade_hoje = (
-        supabase_admin.table("atividade_diaria")
-        .select("id, minutos_estudo, xp_ganho, aulas_concluidas")
-        .eq("usuario_id", id_usuario)
-        .eq("data_atividade", hoje)
-        .limit(1)
-        .execute()
-    )
-    if atividade_hoje.data:
-        registro = atividade_hoje.data[0]
-        supabase_admin.table("atividade_diaria").update({
-            "minutos_estudo": registro["minutos_estudo"] + duracao,
-            "xp_ganho": registro["xp_ganho"] + xp_ganho,
-            "aulas_concluidas": registro["aulas_concluidas"] + 1,
-            "atualizado_em": agora.isoformat(),
-        }).eq("id", registro["id"]).execute()
-    else:
-        supabase_admin.table("atividade_diaria").insert({
-            "usuario_id": id_usuario,
-            "data_atividade": hoje,
-            "minutos_estudo": duracao,
-            "xp_ganho": xp_ganho,
-            "aulas_concluidas": 1,
-        }).execute()
-
-    estatisticas = (
-        supabase_admin.table("estatisticas_usuario")
-        .select("usuario_id, xp_total, ofensiva_atual_dias, maior_ofensiva_dias, ultima_atividade_data, minutos_estudo_total")
-        .eq("usuario_id", id_usuario)
-        .limit(1)
-        .execute()
-    )
-    hoje_data = agora.date()
-
-    if estatisticas.data:
-        registro = estatisticas.data[0]
-        ultima_data = date.fromisoformat(registro["ultima_atividade_data"]) if registro["ultima_atividade_data"] else None
-
-        if ultima_data == hoje_data:
-            nova_ofensiva = registro["ofensiva_atual_dias"]
-        elif ultima_data == hoje_data - timedelta(days=1):
-            nova_ofensiva = registro["ofensiva_atual_dias"] + 1
-        else:
-            nova_ofensiva = 1
-
-        supabase_admin.table("estatisticas_usuario").update({
-            "xp_total": registro["xp_total"] + xp_ganho,
-            "ofensiva_atual_dias": nova_ofensiva,
-            "maior_ofensiva_dias": max(nova_ofensiva, registro["maior_ofensiva_dias"]),
-            "ultima_atividade_data": hoje_data.isoformat(),
-            "minutos_estudo_total": registro["minutos_estudo_total"] + duracao,
-            "atualizado_em": agora.isoformat(),
-        }).eq("usuario_id", id_usuario).execute()
-    else:
-        supabase_admin.table("estatisticas_usuario").insert({
-            "usuario_id": id_usuario,
-            "xp_total": xp_ganho,
-            "ofensiva_atual_dias": 1,
-            "maior_ofensiva_dias": 1,
-            "ultima_atividade_data": hoje_data.isoformat(),
-            "minutos_estudo_total": duracao,
-        }).execute()
 
 
 @router.get('/{slug}', response_model=AulaVisualizacaoResponse)
@@ -330,7 +266,8 @@ def concluir_aula(
                 .data or []
             )
             duracao = sum(c["duracao"] for c in duracao_conteudos)
-            registrar_xp_e_ofensiva(id_usuario, 10, duracao, agora)
+            conceder_xp_e_atividade(id_usuario, 10, minutos_estudo=duracao, agora=agora, aulas_concluidas=1)
+            registrar_evento_gamificacao(id_usuario, EventoGamificacao.AULA_CONCLUIDA)
 
         return montar_resposta_aula(aula, id_usuario)
 

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from database import supabase_admin
 from schemas.onboarding_schema import OnboardingConcluir
 from utils.autenticacao import pegar_usuario_atual
+from utils.data_brasil import hoje_brasil
 
 
 router = APIRouter(
@@ -280,7 +281,7 @@ def concluir_onboarding(
         dados_plano = {
             "tipo_prova_id": tipo_prova["id"],
             "titulo": f"Plano de estudos - {tipo_prova['nome']}",
-            "data_inicio": date.today().isoformat(),
+            "data_inicio": hoje_brasil().isoformat(),
             "status": "ativo",
             "criado_por": "ia",
             "atualizado_em": agora,

@@ -118,6 +118,7 @@ class PostCriarPlanoEstudosParams(BaseModel):
     materias: list[str] = Field(min_length=1)
     tempo_por_dia_minutos: int = Field(gt=0)
     dias_estudo: list[DiaSemana] = Field(min_length=1)
+    usar_ia: bool = False
 
     @field_validator("dias_estudo")
     @classmethod

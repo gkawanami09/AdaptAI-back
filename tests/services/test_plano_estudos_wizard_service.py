@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from services.plano_estudos_wizard_service import PlanoEstudosWizardService
@@ -41,3 +42,12 @@ def test_validar_slugs_rejeita_prova_inexistente():
             service._validar_slugs(["prova-inexistente"], ["matematica"])
 
         assert exc_info.value.status_code == 422
+
+
+def test_generator_padrao_e_deterministico_ia_e_so_sob_demanda():
+    deterministico = MagicMock(name="deterministico")
+    ia = MagicMock(name="ia")
+    service = PlanoEstudosWizardService(deterministic_generator=deterministico, ai_generator=ia)
+
+    assert service._escolher_generator(SimpleNamespace(usar_ia=False)) is deterministico
+    assert service._escolher_generator(SimpleNamespace(usar_ia=True)) is ia

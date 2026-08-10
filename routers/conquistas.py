@@ -3,6 +3,7 @@ from database import supabase_admin
 from datetime import datetime, timedelta, timezone
 from utils.autenticacao import pegar_usuario_atual
 from schemas.conquistas_schema import ConquistasResponse
+from services.gamificacao import recalcular_conquistas_aluno
 
 router = APIRouter(
     prefix='/aluno/conquistas',
@@ -200,4 +201,23 @@ def obter_conquistas(usuario_atual=Depends(pegar_usuario_atual)):
         raise HTTPException(
             status_code=500,
             detail="Erro ao obter conquistas do aluno"
+        )
+
+
+@router.post('/recalcular')
+def recalcular_minhas_conquistas(usuario_atual=Depends(pegar_usuario_atual)):
+    """Reavalia todas as conquistas contra o histórico real do aluno
+    autenticado — útil para quem já tinha atividade (questões
+    respondidas, redações, ofensiva) antes do sistema de conquistas
+    passar a avaliar automaticamente a cada ação."""
+    try:
+        desbloqueadas = recalcular_conquistas_aluno(str(usuario_atual.id))
+        return {"sucesso": True, "conquistas_desbloqueadas": len(desbloqueadas)}
+
+    except Exception as erro:
+        print(f"Erro ao recalcular conquistas do aluno: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao recalcular conquistas do aluno"
         )
