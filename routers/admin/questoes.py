@@ -77,6 +77,74 @@ def excluir_alternativas(questao_id: UUID):
     supabase_admin.table("alternativas_questao").delete().eq("questao_id", str(questao_id)).execute()
 
 
+# Atualiza as alternativas existentes na mesma posição (preserva IDs já
+# referenciados em respostas de alunos) e insere/remove o excedente.
+# Remover uma alternativa já respondida por algum aluno não é permitido.
+def atualizar_alternativas(questao_id: UUID, alternativas: list):
+    existentes = (
+        supabase_admin.table("alternativas_questao")
+        .select("*")
+        .eq("questao_id", str(questao_id))
+        .order("ordem")
+        .execute()
+        .data or []
+    )
+
+    if len(alternativas) < len(existentes):
+        excedentes = existentes[len(alternativas):]
+        ids_excedentes = [alt["id"] for alt in excedentes]
+
+        respostas = (
+            supabase_admin.table("respostas_lista_questoes_aluno")
+            .select("id")
+            .in_("alternativa_id", ids_excedentes)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+        if respostas:
+            raise HTTPException(
+                status_code=409,
+                detail="Não é possível remover alternativas que já foram respondidas por alunos"
+            )
+
+        for id_excedente in ids_excedentes:
+            supabase_admin.table("alternativas_questao").delete().eq("id", id_excedente).execute()
+
+        existentes = existentes[:len(alternativas)]
+
+    id_correta = None
+
+    for indice, alternativa in enumerate(alternativas):
+        if indice < len(existentes):
+            id_alternativa = existentes[indice]["id"]
+            supabase_admin.table("alternativas_questao").update({
+                "letra": alternativa.letra,
+                "conteudo": alternativa.texto,
+                "ordem": indice,
+            }).eq("id", id_alternativa).execute()
+        else:
+            resposta = (
+                supabase_admin.table("alternativas_questao")
+                .insert({
+                    "questao_id": str(questao_id),
+                    "letra": alternativa.letra,
+                    "conteudo": alternativa.texto,
+                    "ordem": indice,
+                })
+                .execute()
+            )
+            id_alternativa = resposta.data[0]["id"]
+
+        if alternativa.correta:
+            id_correta = id_alternativa
+
+    supabase_admin.table("questoes").update(
+        {"alternativa_correta": id_correta}
+    ).eq("id", str(questao_id)).execute()
+
+
 # Aplica os filtros comuns de listagem de questões
 def filtrar_questoes(consulta, busca, materia_id, dificuldade, ativo):
     if busca:
@@ -293,8 +361,7 @@ def editar_questao(questao_id: UUID, dados: QuestaoEditar):
             ).execute()
 
         if dados.alternativas is not None:
-            excluir_alternativas(questao_id)
-            salvar_alternativas(questao_id, dados.alternativas)
+            atualizar_alternativas(questao_id, dados.alternativas)
 
         return {
             "sucesso": True,

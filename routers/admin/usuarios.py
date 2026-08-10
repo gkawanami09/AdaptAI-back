@@ -19,6 +19,19 @@ router = APIRouter(
 STATUS_PARA_SITUACAO = {"ativo": "ativo", "suspenso": "suspenso", "banido": "bloqueado"}
 SITUACAO_PARA_STATUS = {"ativo": "ativo", "suspenso": "suspenso", "bloqueado": "banido"}
 
+CARGOS_VALIDOS = {"aluno", "professor", "admin"}
+CARGO_ALIASES = {"administrador": "admin"}
+
+
+def normalizar_cargo(cargo: str) -> str:
+    cargo_normalizado = CARGO_ALIASES.get(cargo, cargo)
+    if cargo_normalizado not in CARGOS_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cargo inválido: {cargo}. Use um de {sorted(CARGOS_VALIDOS)}"
+        )
+    return cargo_normalizado
+
 ORDENACAO = {
     "nome-az": ("nome", False),
     "nome-za": ("nome", True),
@@ -76,7 +89,7 @@ def listar_usuarios(
         if busca:
             consulta = consulta.ilike("nome", f"%{busca.strip()}%")
         if cargo:
-            consulta = consulta.eq("tipo_usuario", cargo)
+            consulta = consulta.eq("tipo_usuario", normalizar_cargo(cargo))
         if status:
             consulta = consulta.eq("situacao", STATUS_PARA_SITUACAO.get(status, status))
 
@@ -159,7 +172,7 @@ def criar_usuario(dados: UsuarioCriar):
         novo_perfil = {
             "id": id_usuario,
             "nome": nome,
-            "tipo_usuario": dados.cargo,
+            "tipo_usuario": normalizar_cargo(dados.cargo),
             "situacao": "ativo",
         }
 
@@ -188,6 +201,14 @@ def criar_usuario(dados: UsuarioCriar):
 
     except Exception as erro:
         print(f"Erro ao criar usuário: {erro}")
+
+        erro_texto = str(erro).lower()
+        if "already registered" in erro_texto or "already been registered" in erro_texto:
+            raise HTTPException(
+                status_code=409,
+                detail="Já existe uma conta cadastrada com esse email."
+            )
+
         raise HTTPException(
             status_code=500,
             detail="Erro ao criar usuário"
@@ -245,7 +266,7 @@ def editar_usuario(usuario_id: UUID, dados: UsuarioEditar):
         if "nome" in alteracoes:
             alteracoes["nome"] = alteracoes["nome"].strip()
         if "cargo" in alteracoes:
-            alteracoes["tipo_usuario"] = alteracoes.pop("cargo")
+            alteracoes["tipo_usuario"] = normalizar_cargo(alteracoes.pop("cargo"))
 
         if email:
             supabase_admin.auth.admin.update_user_by_id(
@@ -299,7 +320,7 @@ def alterar_cargo(usuario_id: UUID, dados: UsuarioCargoEditar):
     try:
         resposta = (
             supabase_admin.table("perfis")
-            .update({"tipo_usuario": dados.cargo})
+            .update({"tipo_usuario": normalizar_cargo(dados.cargo)})
             .eq("id", str(usuario_id))
             .execute()
         )

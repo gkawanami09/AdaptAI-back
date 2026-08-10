@@ -384,6 +384,7 @@ CREATE TABLE public.redacoes_enviadas (
   corrigido_em timestamp with time zone,
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
+  analise_ia jsonb,
   CONSTRAINT redacoes_enviadas_pkey PRIMARY KEY (id),
   CONSTRAINT redacoes_enviadas_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.perfis(id),
   CONSTRAINT redacoes_enviadas_tema_redacao_id_fkey FOREIGN KEY (tema_redacao_id) REFERENCES public.temas_redacao(id),
@@ -424,6 +425,12 @@ CREATE TABLE public.planos_estudo (
   criado_por text NOT NULL DEFAULT 'ia'::text CHECK (criado_por = ANY (ARRAY['ia'::text, 'usuario'::text, 'sistema'::text])),
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
+  provas_selecionadas ARRAY NOT NULL DEFAULT '{}'::text[],
+  materias_selecionadas ARRAY NOT NULL DEFAULT '{}'::text[],
+  tempo_por_dia_minutos integer CHECK (tempo_por_dia_minutos > 0),
+  dias_estudo ARRAY NOT NULL DEFAULT '{}'::text[],
+  status_geracao text NOT NULL DEFAULT 'concluido'::text CHECK (status_geracao = ANY (ARRAY['gerando'::text, 'concluido'::text, 'erro'::text])),
+  mensagem_erro text,
   CONSTRAINT planos_estudo_pkey PRIMARY KEY (id),
   CONSTRAINT planos_estudo_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.perfis(id),
   CONSTRAINT planos_estudo_tipo_prova_id_fkey FOREIGN KEY (tipo_prova_id) REFERENCES public.tipos_prova(id)
@@ -633,4 +640,16 @@ CREATE TABLE public.competencias_redacao (
   criado_em timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT competencias_redacao_pkey PRIMARY KEY (id),
   CONSTRAINT competencias_redacao_tema_redacao_id_fkey FOREIGN KEY (tema_redacao_id) REFERENCES public.temas_redacao(id)
+);
+CREATE TABLE public.planos_estudo_sessoes (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  plano_estudo_id uuid NOT NULL,
+  materia_slug text NOT NULL,
+  data_agendada date NOT NULL,
+  duracao_minutos integer NOT NULL CHECK (duracao_minutos > 0),
+  tipo text NOT NULL,
+  ordem integer NOT NULL DEFAULT 0,
+  criado_em timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT planos_estudo_sessoes_pkey PRIMARY KEY (id),
+  CONSTRAINT planos_estudo_sessoes_plano_estudo_id_fkey FOREIGN KEY (plano_estudo_id) REFERENCES public.planos_estudo(id)
 );

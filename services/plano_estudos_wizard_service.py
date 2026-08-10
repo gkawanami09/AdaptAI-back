@@ -1,0 +1,514 @@
+import logging
+from datetime import date, datetime, timezone
+
+from fastapi import HTTPException
+
+from database import supabase_admin
+from services.plano_estudos.contexto import AulaContexto, PlanoEstudosContexto, ProvaContexto
+from services.plano_estudos.deterministic_generator import DeterministicPlanGenerator
+from services.plano_estudos.generator_base import PlanoEstudosGenerator
+
+logger = logging.getLogger("plano_estudos_wizard_service")
+
+
+class PlanoEstudosWizardService:
+    """Orquestra o wizard de criação de plano de estudos: valida as
+    preferências do aluno contra o catálogo de provas/matérias, busca o
+    contexto real do banco (provas, matérias, aulas) e delega a
+    distribuição das sessões ao gerador injetado (determinístico hoje,
+    podendo ser substituído por um gerador com IA no futuro sem tocar
+    no router).
+    """
+
+    def __init__(self, generator: PlanoEstudosGenerator | None = None):
+        self._generator = generator or DeterministicPlanGenerator()
+
+    def listar_opcoes(self) -> dict:
+        provas = (
+            supabase_admin
+            .table("tipos_prova")
+            .select("slug, nome, descricao, data_prova")
+            .eq("ativo", True)
+            .order("nome")
+            .execute()
+            .data or []
+        )
+
+        materias = (
+            supabase_admin
+            .table("materias")
+            .select("slug, nome")
+            .eq("ativo", True)
+            .order("ordem")
+            .execute()
+            .data or []
+        )
+
+        return {"provas": provas, "materias": materias}
+
+    def _validar_slugs(self, provas: list[str], materias: list[str]) -> None:
+        provas_validas = {
+            p["slug"] for p in
+            supabase_admin.table("tipos_prova").select("slug").in_("slug", provas).execute().data or []
+        }
+        materias_validas = {
+            m["slug"] for m in
+            supabase_admin.table("materias").select("slug").in_("slug", materias).execute().data or []
+        }
+
+        provas_invalidas = set(provas) - provas_validas
+        materias_invalidas = set(materias) - materias_validas
+
+        if provas_invalidas or materias_invalidas:
+            partes = []
+            if provas_invalidas:
+                partes.append(f"provas inválidas: {sorted(provas_invalidas)}")
+            if materias_invalidas:
+                partes.append(f"matérias inválidas: {sorted(materias_invalidas)}")
+
+            raise HTTPException(status_code=422, detail="; ".join(partes))
+
+    def _montar_contexto(self, dados) -> PlanoEstudosContexto:
+        hoje = date.today()
+
+        provas_rows = (
+            supabase_admin
+            .table("tipos_prova")
+            .select("id, slug, nome, data_prova")
+            .in_("slug", dados.provas)
+            .execute()
+            .data or []
+        )
+
+        materias_rows = (
+            supabase_admin
+            .table("materias")
+            .select("id, slug, nome")
+            .in_("slug", dados.materias)
+            .execute()
+            .data or []
+        )
+        materia_id_para_slug = {m["id"]: m["slug"] for m in materias_rows}
+
+        provas = [
+            ProvaContexto(
+                slug=p["slug"],
+                nome=p["nome"],
+                data_prova=date.fromisoformat(p["data_prova"]) if p.get("data_prova") else None,
+            )
+            for p in provas_rows
+        ]
+
+        ids_provas = [p["id"] for p in provas_rows]
+        materias_por_prova = self._materias_relacionadas_por_prova(
+            provas_rows, ids_provas, materia_id_para_slug
+        )
+
+        aulas_por_materia = self._aulas_por_materia(materias_rows)
+
+        return PlanoEstudosContexto(
+            data_inicio=hoje,
+            provas=provas,
+            materias_selecionadas=dados.materias,
+            materias_por_prova=materias_por_prova,
+            aulas_por_materia=aulas_por_materia,
+            tempo_por_dia_minutos=dados.tempo_por_dia_minutos,
+            dias_estudo=dados.dias_estudo,
+        )
+
+    def _materias_relacionadas_por_prova(
+        self, provas_rows: list[dict], ids_provas: list[str], materia_id_para_slug: dict[str, str]
+    ) -> dict[str, set[str]]:
+        slug_por_prova_id = {p["id"]: p["slug"] for p in provas_rows}
+        relacionadas: dict[str, set[str]] = {p["slug"]: set() for p in provas_rows}
+
+        if not ids_provas:
+            return relacionadas
+
+        questoes = (
+            supabase_admin
+            .table("questoes")
+            .select("materia_id, tipo_prova_id")
+            .in_("tipo_prova_id", ids_provas)
+            .eq("ativo", True)
+            .execute()
+            .data or []
+        )
+
+        listas = (
+            supabase_admin
+            .table("listas_questoes")
+            .select("materia_id, tipo_prova_id")
+            .in_("tipo_prova_id", ids_provas)
+            .execute()
+            .data or []
+        )
+
+        for linha in questoes + listas:
+            materia_id = linha.get("materia_id")
+            tipo_prova_id = linha.get("tipo_prova_id")
+            materia_slug = materia_id_para_slug.get(materia_id)
+            prova_slug = slug_por_prova_id.get(tipo_prova_id)
+
+            if materia_slug and prova_slug:
+                relacionadas[prova_slug].add(materia_slug)
+
+        return relacionadas
+
+    def _aulas_por_materia(self, materias_rows: list[dict]) -> dict[str, list[AulaContexto]]:
+        ids_materias = [m["id"] for m in materias_rows]
+        materia_id_para_slug = {m["id"]: m["slug"] for m in materias_rows}
+
+        aulas_por_materia: dict[str, list[AulaContexto]] = {m["slug"]: [] for m in materias_rows}
+
+        if not ids_materias:
+            return aulas_por_materia
+
+        topicos = (
+            supabase_admin
+            .table("topicos")
+            .select("topico_id, materia_id, ordem")
+            .in_("materia_id", ids_materias)
+            .execute()
+            .data or []
+        )
+        ordem_por_topico = {t["topico_id"]: t["ordem"] for t in topicos}
+
+        aulas = (
+            supabase_admin
+            .table("aulas")
+            .select("id, materia_id, topico_id, titulo, ordem")
+            .in_("materia_id", ids_materias)
+            .eq("ativo", True)
+            .execute()
+            .data or []
+        )
+
+        if not aulas:
+            return aulas_por_materia
+
+        ids_aulas = [a["id"] for a in aulas]
+        conteudos = (
+            supabase_admin
+            .table("aulas_conteudo")
+            .select("aula_id, duracao")
+            .in_("aula_id", ids_aulas)
+            .eq("ativo", True)
+            .execute()
+            .data or []
+        )
+
+        duracao_por_aula: dict[str, int] = {}
+        for c in conteudos:
+            duracao_por_aula[c["aula_id"]] = duracao_por_aula.get(c["aula_id"], 0) + c["duracao"]
+
+        candidatas: dict[str, list[AulaContexto]] = {m["slug"]: [] for m in materias_rows}
+        for aula in aulas:
+            duracao = duracao_por_aula.get(aula["id"], 0)
+            if duracao <= 0:
+                continue
+
+            materia_slug = materia_id_para_slug.get(aula["materia_id"])
+            if not materia_slug:
+                continue
+
+            candidatas[materia_slug].append(AulaContexto(
+                id=aula["id"],
+                materia_slug=materia_slug,
+                titulo=aula["titulo"],
+                duracao_minutos=duracao,
+                ordem_topico=ordem_por_topico.get(aula["topico_id"], 999999),
+                ordem_aula=aula["ordem"],
+            ))
+
+        for slug, lista in candidatas.items():
+            lista.sort(key=lambda a: (a.ordem_topico, a.ordem_aula))
+            aulas_por_materia[slug] = lista
+
+        return aulas_por_materia
+
+    def criar_plano(self, usuario_id: str, dados) -> dict:
+        self._validar_slugs(dados.provas, dados.materias)
+
+        novo_plano = (
+            supabase_admin
+            .table("planos_estudo")
+            .insert({
+                "usuario_id": usuario_id,
+                "titulo": "Plano de estudos",
+                "status": "ativo",
+                "criado_por": "sistema",
+                "provas_selecionadas": dados.provas,
+                "materias_selecionadas": dados.materias,
+                "tempo_por_dia_minutos": dados.tempo_por_dia_minutos,
+                "dias_estudo": dados.dias_estudo,
+                "status_geracao": "gerando",
+            })
+            .execute()
+        )
+
+        if not novo_plano.data:
+            raise HTTPException(status_code=500, detail="Não foi possível criar o plano de estudos")
+
+        plano = novo_plano.data[0]
+
+        try:
+            self._gerar_e_persistir(plano["id"], usuario_id, dados)
+        except Exception:
+            logger.exception("Erro ao gerar plano de estudos plano_id=%s", plano["id"])
+            supabase_admin.table("planos_estudo").update({
+                "status_geracao": "erro",
+                "mensagem_erro": "Não foi possível gerar o plano. Tente novamente.",
+                "atualizado_em": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", plano["id"]).execute()
+            plano["status_geracao"] = "erro"
+            return plano
+
+        plano["status_geracao"] = "concluido"
+        return plano
+
+    def _gerar_e_persistir(self, plano_id: str, usuario_id: str, dados) -> None:
+        contexto = self._montar_contexto(dados)
+        plano_gerado = self._generator.gerar(contexto)
+
+        if plano_gerado.avisos:
+            logger.info(
+                "plano_estudos_avisos plano_id=%s avisos=%s", plano_id, plano_gerado.avisos
+            )
+
+        materias_rows = (
+            supabase_admin
+            .table("materias")
+            .select("id, slug")
+            .in_("slug", dados.materias)
+            .execute()
+            .data or []
+        )
+        materia_id_por_slug = {m["slug"]: m["id"] for m in materias_rows}
+
+        sessoes_para_inserir = []
+        tarefas_para_inserir = []
+        for dia in plano_gerado.dias:
+            for indice, sessao in enumerate(dia.sessoes):
+                sessoes_para_inserir.append({
+                    "plano_estudo_id": plano_id,
+                    "materia_slug": sessao.materia,
+                    "data_agendada": dia.data.isoformat(),
+                    "duracao_minutos": sessao.duracao_minutos,
+                    "tipo": sessao.tipo,
+                    "ordem": indice,
+                    "aula_id": sessao.aula_id,
+                    "titulo": sessao.titulo,
+                })
+
+                materia_id = materia_id_por_slug.get(sessao.materia)
+                if materia_id is None:
+                    continue
+
+                tarefas_para_inserir.append(self._montar_tarefa(
+                    plano_id=plano_id,
+                    usuario_id=usuario_id,
+                    materia_id=materia_id,
+                    aula_id=sessao.aula_id,
+                    titulo=sessao.titulo,
+                    tipo=sessao.tipo,
+                    data_agendada=dia.data.isoformat(),
+                    duracao_minutos=sessao.duracao_minutos,
+                    ordem=indice,
+                ))
+
+        if sessoes_para_inserir:
+            supabase_admin.table("planos_estudo_sessoes").insert(sessoes_para_inserir).execute()
+
+        if tarefas_para_inserir:
+            supabase_admin.table("tarefas_estudo").insert(tarefas_para_inserir).execute()
+
+        supabase_admin.table("planos_estudo").update({
+            "status_geracao": "concluido",
+            "data_inicio": plano_gerado.periodo_inicio.isoformat(),
+            "data_fim": plano_gerado.periodo_fim.isoformat(),
+            "atualizado_em": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", plano_id).execute()
+
+    def _montar_tarefa(
+        self, plano_id: str, usuario_id: str, materia_id: str, aula_id: str | None,
+        titulo: str | None, tipo: str, data_agendada: str, duracao_minutos: int, ordem: int,
+    ) -> dict:
+        return {
+            "plano_estudo_id": plano_id,
+            "usuario_id": usuario_id,
+            "materia_id": materia_id,
+            "aula_id": aula_id,
+            "titulo": titulo or "Sessão de estudo",
+            "tipo_tarefa": "aula" if tipo == "teoria" else "revisao",
+            "data_agendada": data_agendada,
+            "duracao_minutos": duracao_minutos,
+            "ordem": ordem,
+            "origem": "sistema",
+        }
+
+    def sincronizar_tarefas(self, plano_id: str, usuario_id: str) -> int:
+        """Recria as tarefas_estudo (usadas pela tela do dia) a partir das
+        sessões já salvas em planos_estudo_sessoes. Necessário para planos
+        gerados antes de o service passar a criar as tarefas junto — e
+        seguro de rodar de novo, pois não duplica se já existirem tarefas
+        para o plano.
+        """
+        plano = (
+            supabase_admin
+            .table("planos_estudo")
+            .select("id, usuario_id, status_geracao")
+            .eq("id", plano_id)
+            .eq("usuario_id", usuario_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not plano.data:
+            raise HTTPException(status_code=404, detail="Plano não encontrado")
+
+        if plano.data[0]["status_geracao"] != "concluido":
+            raise HTTPException(status_code=409, detail="Plano ainda não foi concluído")
+
+        tarefas_existentes = (
+            supabase_admin
+            .table("tarefas_estudo")
+            .select("id")
+            .eq("plano_estudo_id", plano_id)
+            .limit(1)
+            .execute()
+        )
+
+        if tarefas_existentes.data:
+            raise HTTPException(status_code=409, detail="Este plano já possui tarefas sincronizadas")
+
+        sessoes = (
+            supabase_admin
+            .table("planos_estudo_sessoes")
+            .select("materia_slug, data_agendada, duracao_minutos, tipo, ordem, aula_id, titulo")
+            .eq("plano_estudo_id", plano_id)
+            .order("data_agendada")
+            .order("ordem")
+            .execute()
+            .data or []
+        )
+
+        if not sessoes:
+            return 0
+
+        slugs = list({s["materia_slug"] for s in sessoes})
+        materias_rows = (
+            supabase_admin
+            .table("materias")
+            .select("id, slug")
+            .in_("slug", slugs)
+            .execute()
+            .data or []
+        )
+        materia_id_por_slug = {m["slug"]: m["id"] for m in materias_rows}
+
+        tarefas_para_inserir = []
+        for sessao in sessoes:
+            materia_id = materia_id_por_slug.get(sessao["materia_slug"])
+            if materia_id is None:
+                continue
+
+            tarefas_para_inserir.append(self._montar_tarefa(
+                plano_id=plano_id,
+                usuario_id=usuario_id,
+                materia_id=materia_id,
+                aula_id=sessao.get("aula_id"),
+                titulo=sessao.get("titulo"),
+                tipo=sessao["tipo"],
+                data_agendada=sessao["data_agendada"],
+                duracao_minutos=sessao["duracao_minutos"],
+                ordem=sessao["ordem"],
+            ))
+
+        if tarefas_para_inserir:
+            supabase_admin.table("tarefas_estudo").insert(tarefas_para_inserir).execute()
+
+        return len(tarefas_para_inserir)
+
+    def obter_plano(self, plano_id: str, usuario_id: str) -> dict | None:
+        resposta = (
+            supabase_admin
+            .table("planos_estudo")
+            .select("id, usuario_id, status_geracao, mensagem_erro, data_inicio, data_fim")
+            .eq("id", plano_id)
+            .eq("usuario_id", usuario_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not resposta.data:
+            return None
+
+        plano = resposta.data[0]
+
+        if plano["status_geracao"] != "concluido":
+            return plano
+
+        sessoes = (
+            supabase_admin
+            .table("planos_estudo_sessoes")
+            .select("materia_slug, data_agendada, duracao_minutos, tipo, ordem, aula_id, titulo")
+            .eq("plano_estudo_id", plano_id)
+            .order("data_agendada")
+            .order("ordem")
+            .execute()
+            .data or []
+        )
+
+        plano["sessoes"] = sessoes
+        return plano
+
+    def montar_resposta_gerado(self, plano: dict) -> dict:
+        if plano["status_geracao"] == "gerando":
+            return {"id": plano["id"], "status": "gerando"}
+
+        if plano["status_geracao"] == "erro":
+            return {
+                "id": plano["id"],
+                "status": "erro",
+                "mensagem": plano.get("mensagem_erro") or "Não foi possível gerar o plano. Tente novamente.",
+            }
+
+        dias_por_data: dict[str, list] = {}
+        for sessao in plano.get("sessoes", []):
+            dias_por_data.setdefault(sessao["data_agendada"], []).append(sessao)
+
+        data_inicio = date.fromisoformat(plano["data_inicio"]) if plano["data_inicio"] else date.today()
+
+        semanas_por_numero: dict[int, dict] = {}
+        for data_iso in sorted(dias_por_data.keys()):
+            data_dia = date.fromisoformat(data_iso)
+            numero_semana = ((data_dia - data_inicio).days // 7) + 1
+
+            semana = semanas_por_numero.setdefault(numero_semana, {"numero": numero_semana, "dias": []})
+            semana["dias"].append({
+                "dia": data_dia.strftime("%A").lower(),
+                "data": data_iso,
+                "sessoes": [
+                    {
+                        "materia": s["materia_slug"],
+                        "aula_id": s.get("aula_id"),
+                        "titulo": s.get("titulo"),
+                        "duracao_minutos": s["duracao_minutos"],
+                        "tipo": s["tipo"],
+                    }
+                    for s in dias_por_data[data_iso]
+                ],
+            })
+
+        return {
+            "id": plano["id"],
+            "status": "concluido",
+            "plano": {
+                "periodo": {
+                    "inicio": plano["data_inicio"],
+                    "fim": plano["data_fim"],
+                },
+                "semanas": [semanas_por_numero[n] for n in sorted(semanas_por_numero.keys())],
+            },
+        }

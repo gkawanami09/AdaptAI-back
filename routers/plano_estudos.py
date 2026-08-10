@@ -9,12 +9,19 @@ from schemas.plano_estudos_schema import (
     ConcluirTarefaResponse,
     TarefaPlanoCriar,
     TarefaPlanoCriarResponse,
+    GetPlanoEstudosOpcoesResponse,
+    PostCriarPlanoEstudosParams,
+    PostCriarPlanoEstudosResponse,
+    GetPlanoEstudosGeradoResponse,
 )
+from services.plano_estudos_wizard_service import PlanoEstudosWizardService
 
 router = APIRouter(
     prefix='/aluno/plano-estudos',
     tags=['Aluno - Plano de Estudos']
 )
+
+wizard_service = PlanoEstudosWizardService()
 
 DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
 MESES = [
@@ -30,6 +37,101 @@ TIPO_TAREFA_PARA_TIPO_CONTRATO = {
     "revisao": "revisao",
     "personalizada": "revisao",
 }
+
+
+@router.get('/opcoes', response_model=GetPlanoEstudosOpcoesResponse)
+def obter_opcoes_plano_estudos(usuario_atual=Depends(pegar_usuario_atual)):
+    try:
+        return wizard_service.listar_opcoes()
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao obter opções de plano de estudos: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao obter opções de plano de estudos"
+        )
+
+
+@router.post('', status_code=201, response_model=PostCriarPlanoEstudosResponse)
+def criar_plano_estudos_wizard(
+    dados: PostCriarPlanoEstudosParams,
+    usuario_atual=Depends(pegar_usuario_atual)
+):
+    try:
+        id_usuario = str(usuario_atual.id)
+        plano = wizard_service.criar_plano(id_usuario, dados)
+
+        if plano["status_geracao"] == "erro":
+            return {
+                "id": plano["id"],
+                "status": "erro",
+                "mensagem": plano.get("mensagem_erro") or "Não foi possível gerar o plano. Tente novamente.",
+            }
+
+        return {
+            "id": plano["id"],
+            "status": "concluido",
+            "mensagem": "Seu plano foi gerado.",
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao criar plano de estudos: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao criar plano de estudos"
+        )
+
+
+@router.get('/{plano_id}', response_model=GetPlanoEstudosGeradoResponse)
+def obter_plano_estudos_gerado(plano_id: UUID, usuario_atual=Depends(pegar_usuario_atual)):
+    try:
+        plano = wizard_service.obter_plano(str(plano_id), str(usuario_atual.id))
+
+        if not plano:
+            raise HTTPException(
+                status_code=404,
+                detail="Plano não encontrado"
+            )
+
+        return wizard_service.montar_resposta_gerado(plano)
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao obter plano de estudos gerado: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao obter plano de estudos gerado"
+        )
+
+
+@router.post('/{plano_id}/sincronizar-tarefas')
+def sincronizar_tarefas_plano_estudos(plano_id: UUID, usuario_atual=Depends(pegar_usuario_atual)):
+    try:
+        tarefas_criadas = wizard_service.sincronizar_tarefas(str(plano_id), str(usuario_atual.id))
+
+        return {"sucesso": True, "tarefas_criadas": tarefas_criadas}
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao sincronizar tarefas do plano de estudos: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao sincronizar tarefas do plano de estudos"
+        )
 
 
 @router.get('', response_model=PlanoEstudosResponse)

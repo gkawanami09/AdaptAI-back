@@ -1,6 +1,12 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional
 from uuid import UUID
+
+
+DiaSemana = Literal[
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+]
+PlanoEstudosGeradoStatus = Literal["gerando", "concluido", "erro"]
 
 
 class ProgressoPlano(BaseModel):
@@ -86,3 +92,78 @@ class TarefaPlanoCriar(BaseModel):
 class TarefaPlanoCriarResponse(BaseModel):
     id: UUID
     sucesso: bool
+
+
+# --- Wizard de criação de plano de estudos ------------------------------
+
+class ProvaOpcao(BaseModel):
+    slug: str
+    nome: str
+    descricao: Optional[str] = None
+    data_prova: Optional[str] = None
+
+
+class MateriaOpcao(BaseModel):
+    slug: str
+    nome: str
+
+
+class GetPlanoEstudosOpcoesResponse(BaseModel):
+    provas: list[ProvaOpcao]
+    materias: list[MateriaOpcao]
+
+
+class PostCriarPlanoEstudosParams(BaseModel):
+    provas: list[str] = Field(min_length=1)
+    materias: list[str] = Field(min_length=1)
+    tempo_por_dia_minutos: int = Field(gt=0)
+    dias_estudo: list[DiaSemana] = Field(min_length=1)
+
+    @field_validator("dias_estudo")
+    @classmethod
+    def sem_dias_duplicados(cls, valor: list[str]) -> list[str]:
+        if len(valor) != len(set(valor)):
+            raise ValueError("Não pode haver dias de estudo duplicados")
+        return valor
+
+
+class PostCriarPlanoEstudosResponse(BaseModel):
+    id: UUID
+    status: PlanoEstudosGeradoStatus
+    mensagem: Optional[str] = None
+
+
+class PlanoEstudosGeradoSessao(BaseModel):
+    materia: str
+    aula_id: Optional[UUID] = None
+    titulo: Optional[str] = None
+    duracao_minutos: int
+    tipo: str
+
+
+class PlanoEstudosGeradoDia(BaseModel):
+    dia: DiaSemana
+    data: str
+    sessoes: list[PlanoEstudosGeradoSessao]
+
+
+class PlanoEstudosGeradoSemana(BaseModel):
+    numero: int
+    dias: list[PlanoEstudosGeradoDia]
+
+
+class PeriodoPlano(BaseModel):
+    inicio: str
+    fim: str
+
+
+class PlanoEstudosGerado(BaseModel):
+    periodo: PeriodoPlano
+    semanas: list[PlanoEstudosGeradoSemana]
+
+
+class GetPlanoEstudosGeradoResponse(BaseModel):
+    id: UUID
+    status: PlanoEstudosGeradoStatus
+    mensagem: Optional[str] = None
+    plano: Optional[PlanoEstudosGerado] = None
