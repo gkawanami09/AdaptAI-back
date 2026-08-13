@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+import time
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS
 from routers import auth, usuarios, materias, questoes, onboarding, dashboard, plano_estudos, biblioteca_aulas, aula_visualizacao, banco_questoes, visualizacao_questoes, simulados, progresso, conquistas, configuracoes_aluno, redacao, chat
@@ -15,6 +17,8 @@ from routers.admin import dashboard as admin_dashboard
 from routers.admin import conquistas as admin_conquistas
 from routers.admin import missoes as admin_missoes
 from routers.admin import gamificacao as admin_gamificacao
+from routers.admin import monitoramento as admin_monitoramento
+from services.monitoramento import monitor
 
 app = FastAPI()
 
@@ -25,6 +29,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def middleware_telemetria(request: Request, call_next):
+    inicio = time.perf_counter()
+    try:
+        resposta = await call_next(request)
+    except Exception:
+        duracao_ms = (time.perf_counter() - inicio) * 1000
+        monitor.registrar_request(request.url.path, duracao_ms, status_code=500)
+        raise
+
+    duracao_ms = (time.perf_counter() - inicio) * 1000
+    monitor.registrar_request(request.url.path, duracao_ms, resposta.status_code)
+    return resposta
 
 app.include_router(auth.router)
 app.include_router(usuarios.router)
@@ -42,6 +61,7 @@ app.include_router(admin_dashboard.router)
 app.include_router(admin_conquistas.router)
 app.include_router(admin_missoes.router)
 app.include_router(admin_gamificacao.router)
+app.include_router(admin_monitoramento.router)
 app.include_router(dashboard.router)
 app.include_router(plano_estudos.router)
 app.include_router(aula_visualizacao.router)

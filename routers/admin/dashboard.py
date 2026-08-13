@@ -48,15 +48,81 @@ def obter_dashboard(
         inicio, agora, inicio_anterior = calcular_intervalo(periodo)
         agrupamento = PERIODO_AGRUPAMENTO[periodo]
 
-        # TODO: user, answer and exam KPIs depend on user/answer/streak tables that don't exist yet
+        total_usuarios = supabase_admin.table("perfis").select("id", count="exact").execute().count or 0
+        usuarios_periodo_anterior = (
+            supabase_admin.table("perfis")
+            .select("id", count="exact")
+            .lt("criado_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        total_usuarios_variacao_pct = (
+            round(((total_usuarios - usuarios_periodo_anterior) / usuarios_periodo_anterior) * 100, 1)
+            if usuarios_periodo_anterior else 0
+        )
+
+        respostas_periodo = (
+            supabase_admin.table("respostas_lista_questoes_aluno")
+            .select("id", count="exact")
+            .gte("respondido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        respostas_periodo_anterior = (
+            supabase_admin.table("respostas_lista_questoes_aluno")
+            .select("id", count="exact")
+            .gte("respondido_em", inicio_anterior.isoformat())
+            .lt("respondido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        questoes_respondidas_variacao_pct = (
+            round(((respostas_periodo - respostas_periodo_anterior) / respostas_periodo_anterior) * 100, 1)
+            if respostas_periodo_anterior else 0
+        )
+
+        provas_periodo = (
+            supabase_admin.table("sessoes_simulado")
+            .select("id", count="exact")
+            .eq("status", "concluido")
+            .gte("concluido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        provas_periodo_anterior = (
+            supabase_admin.table("sessoes_simulado")
+            .select("id", count="exact")
+            .eq("status", "concluido")
+            .gte("concluido_em", inicio_anterior.isoformat())
+            .lt("concluido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        provas_realizadas_variacao_pct = (
+            round(((provas_periodo - provas_periodo_anterior) / provas_periodo_anterior) * 100, 1)
+            if provas_periodo_anterior else 0
+        )
+
+        ofensivas = (
+            supabase_admin.table("estatisticas_usuario")
+            .select("ofensiva_atual_dias")
+            .execute()
+            .data or []
+        )
+        ofensiva_media_dias = (
+            round(sum(o["ofensiva_atual_dias"] for o in ofensivas) / len(ofensivas), 1)
+            if ofensivas else 0
+        )
+
         kpis = {
-            "total_usuarios": 0,
-            "total_usuarios_variacao_pct": 0,
-            "questoes_respondidas": 0,
-            "questoes_respondidas_variacao_pct": 0,
-            "provas_realizadas": 0,
-            "provas_realizadas_variacao_pct": 0,
-            "ofensiva_media_dias": 0,
+            "total_usuarios": total_usuarios,
+            "total_usuarios_variacao_pct": total_usuarios_variacao_pct,
+            "questoes_respondidas": respostas_periodo,
+            "questoes_respondidas_variacao_pct": questoes_respondidas_variacao_pct,
+            "provas_realizadas": provas_periodo,
+            "provas_realizadas_variacao_pct": provas_realizadas_variacao_pct,
+            "ofensiva_media_dias": ofensiva_media_dias,
+            # TODO: sem série histórica de ofensiva agregada ainda para calcular a variação vs. período anterior
             "ofensiva_media_variacao_dias": 0,
         }
 
@@ -120,13 +186,41 @@ def obter_dashboard(
             .execute()
         )
 
-        # TODO: usuarios_online, novos_cadastros, provas_iniciadas e tempo_medio_estudo_min dependem de tabelas que não existem ainda
+        novos_cadastros_hoje = (
+            supabase_admin.table("perfis")
+            .select("id", count="exact")
+            .gte("criado_em", inicio_hoje.isoformat())
+            .execute()
+            .count or 0
+        )
+
+        provas_iniciadas_hoje = (
+            supabase_admin.table("sessoes_simulado")
+            .select("id", count="exact")
+            .gte("iniciado_em", inicio_hoje.isoformat())
+            .execute()
+            .count or 0
+        )
+
+        atividade_diaria_hoje = (
+            supabase_admin.table("atividade_diaria")
+            .select("minutos_estudo")
+            .gte("data_atividade", inicio_hoje.date().isoformat())
+            .execute()
+            .data or []
+        )
+        tempo_medio_estudo_min = (
+            round(sum(a["minutos_estudo"] for a in atividade_diaria_hoje) / len(atividade_diaria_hoje))
+            if atividade_diaria_hoje else 0
+        )
+
+        # TODO: usuarios_online depende de rastreamento de sessão/presença em tempo real que não existe ainda
         atividade_hoje = {
             "usuarios_online": 0,
             "questoes_respondidas": questoes_hoje.count or 0,
-            "novos_cadastros": 0,
-            "provas_iniciadas": 0,
-            "tempo_medio_estudo_min": 0,
+            "novos_cadastros": novos_cadastros_hoje,
+            "provas_iniciadas": provas_iniciadas_hoje,
+            "tempo_medio_estudo_min": tempo_medio_estudo_min,
         }
 
         # Atividades recentes

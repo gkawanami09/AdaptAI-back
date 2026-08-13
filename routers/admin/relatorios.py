@@ -39,15 +39,77 @@ def obter_relatorios(
 
         inicio, agora, inicio_anterior = calcular_intervalo(periodo)
 
-        # TODO: user and answer KPIs depend on user/answer tables that don't exist yet
+        total_usuarios = supabase_admin.table("perfis").select("id", count="exact").execute().count or 0
+        usuarios_periodo_anterior = (
+            supabase_admin.table("perfis")
+            .select("id", count="exact")
+            .lt("criado_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        total_usuarios_variacao_pct = (
+            round(((total_usuarios - usuarios_periodo_anterior) / usuarios_periodo_anterior) * 100, 1)
+            if usuarios_periodo_anterior else 0
+        )
+
+        respostas_periodo = (
+            supabase_admin.table("respostas_lista_questoes_aluno")
+            .select("correta, respondido_em")
+            .gte("respondido_em", inicio.isoformat())
+            .execute()
+            .data or []
+        )
+        respostas_periodo_anterior_count = (
+            supabase_admin.table("respostas_lista_questoes_aluno")
+            .select("id", count="exact")
+            .gte("respondido_em", inicio_anterior.isoformat())
+            .lt("respondido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        questoes_respondidas_periodo = len(respostas_periodo)
+        questoes_respondidas_variacao_pct = (
+            round(((questoes_respondidas_periodo - respostas_periodo_anterior_count) / respostas_periodo_anterior_count) * 100, 1)
+            if respostas_periodo_anterior_count else 0
+        )
+
+        acertos_periodo = sum(1 for r in respostas_periodo if r["correta"])
+        taxa_media_acerto_pct = (
+            round((acertos_periodo / questoes_respondidas_periodo) * 100, 1)
+            if questoes_respondidas_periodo else 0
+        )
+
+        listas_concluidas_periodo = (
+            supabase_admin.table("progresso_lista_questoes_aluno")
+            .select("id", count="exact")
+            .eq("status", "finalizada")
+            .gte("concluido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        listas_concluidas_periodo_anterior = (
+            supabase_admin.table("progresso_lista_questoes_aluno")
+            .select("id", count="exact")
+            .eq("status", "finalizada")
+            .gte("concluido_em", inicio_anterior.isoformat())
+            .lt("concluido_em", inicio.isoformat())
+            .execute()
+            .count or 0
+        )
+        listas_concluidas_variacao_pct = (
+            round(((listas_concluidas_periodo - listas_concluidas_periodo_anterior) / listas_concluidas_periodo_anterior) * 100, 1)
+            if listas_concluidas_periodo_anterior else 0
+        )
+
         kpis = {
-            "total_usuarios": 0,
-            "total_usuarios_variacao_pct": 0,
-            "questoes_respondidas": 0,
-            "questoes_respondidas_variacao_pct": 0,
-            "listas_concluidas": 0,
-            "listas_concluidas_variacao_pct": 0,
-            "taxa_media_acerto_pct": 0,
+            "total_usuarios": total_usuarios,
+            "total_usuarios_variacao_pct": total_usuarios_variacao_pct,
+            "questoes_respondidas": questoes_respondidas_periodo,
+            "questoes_respondidas_variacao_pct": questoes_respondidas_variacao_pct,
+            "listas_concluidas": listas_concluidas_periodo,
+            "listas_concluidas_variacao_pct": listas_concluidas_variacao_pct,
+            "taxa_media_acerto_pct": taxa_media_acerto_pct,
+            # TODO: sem série histórica de taxa de acerto do período anterior calculada ainda
             "taxa_media_acerto_variacao_pct": 0,
         }
 
@@ -271,7 +333,9 @@ def obter_ranking_conteudos(
             if aula_id:
                 contagem_por_aula[aula_id] = contagem_por_aula.get(aula_id, 0) + 1
 
-        # TODO: accuracy rate, average time and total accesses depend on a response/access table that doesn't exist yet
+        # taxa_acerto_pct/tempo_medio_seg poderiam ser calculados a partir de respostas_lista_questoes_aluno
+        # e tentativas_questoes, mas nenhuma delas guarda aula_id diretamente nem tempo de acesso por aula —
+        # ficam zerados até existir uma tabela de acesso/tempo por aula.
         ranking_completo = sorted(
             [
                 {

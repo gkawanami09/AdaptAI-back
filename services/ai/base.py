@@ -19,9 +19,12 @@ class AIProvider(ABC):
     fora de services/ai/ deve importar um provider concreto ou saber
     que modelo/mecanismo de inferência está por trás — só esta interface.
 
-    Apenas `corrigir_redacao` está implementada nos providers concretos
-    nesta fase; os demais métodos são pontos de extensão preparados
-    para funcionalidades futuras (chat pedagógico, geração de questões).
+    Todos os métodos estão implementados nos providers concretos
+    (Ollama e OpenAI-compatible): `corrigir_redacao` e `responder_chat`
+    usam saída estruturada/livre para o fluxo de correção de redação e
+    chat pedagógico; `gerar_feedback`, `explicar_erro` e `gerar_questoes`
+    cobrem feedback textual livre, explicação de erros em questões e
+    geração de novas questões com saída estruturada.
     """
 
     @abstractmethod

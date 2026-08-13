@@ -15,6 +15,7 @@ from schemas.plano_estudos_schema import (
     GetPlanoEstudosGeradoResponse,
 )
 from services.plano_estudos_wizard_service import PlanoEstudosWizardService
+from services.plano_estudos.periodo import dias_calendario
 from services.gamificacao import EventoGamificacao, conceder_xp_e_atividade, registrar_evento_gamificacao
 
 router = APIRouter(
@@ -402,29 +403,72 @@ def obter_plano_estudos(
 def reorganizar_plano_ia(usuario_atual=Depends(pegar_usuario_atual)):
     try:
         id_usuario = str(usuario_atual.id)
+        hoje = datetime.now(timezone.utc).date()
+
+        plano_ativo = (
+            supabase_admin
+            .table("planos_estudo")
+            .select("id, data_fim, dias_estudo")
+            .eq("usuario_id", id_usuario)
+            .eq("status", "ativo")
+            .limit(1)
+            .execute()
+            .data
+        )
+
+        if not plano_ativo:
+            raise HTTPException(
+                status_code=422,
+                detail="Não há plano de estudos ativo para reorganizar"
+            )
+
+        plano = plano_ativo[0]
 
         tarefas_pendentes = (
             supabase_admin
             .table("tarefas_estudo")
-            .select("id", count="exact")
+            .select("id, ordem")
             .eq("usuario_id", id_usuario)
+            .eq("plano_estudo_id", plano["id"])
             .eq("status", "pendente")
+            .order("data_agendada")
+            .order("ordem")
             .execute()
+            .data or []
         )
 
-        if not tarefas_pendentes.count:
+        if not tarefas_pendentes:
             raise HTTPException(
                 status_code=422,
                 detail="Não há tarefas suficientes para reorganizar"
             )
 
-        # TODO: integração com IA para redistribuir tarefas pendentes ainda não
-        # implementada. Aguardando definição do serviço/modelo responsável pela
-        # reorganização automática do plano.
-        raise HTTPException(
-            status_code=422,
-            detail="Reorganização automática ainda não disponível"
+        data_fim = date.fromisoformat(plano["data_fim"]) if plano.get("data_fim") else None
+        dias_estudo = plano.get("dias_estudo") or []
+
+        dias_disponiveis = (
+            dias_calendario(hoje, data_fim, dias_estudo)
+            if data_fim and dias_estudo
+            else []
         )
+
+        if not dias_disponiveis:
+            raise HTTPException(
+                status_code=422,
+                detail="Não há dias de estudo disponíveis no período restante do plano"
+            )
+
+        # Redistribui as tarefas pendentes igualmente entre os dias de estudo
+        # restantes até o fim do plano — abordagem determinística (sem chamada
+        # de IA) para uma tarefa puramente de reagendamento, mais previsível e
+        # sem custo/latência de inferência.
+        for indice, tarefa in enumerate(tarefas_pendentes):
+            novo_dia = dias_disponiveis[indice % len(dias_disponiveis)]
+            supabase_admin.table("tarefas_estudo").update({
+                "data_agendada": novo_dia.isoformat(),
+            }).eq("id", tarefa["id"]).execute()
+
+        return {"sucesso": True}
 
     except HTTPException:
         raise

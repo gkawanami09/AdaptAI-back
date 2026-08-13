@@ -2,11 +2,16 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from database import supabase_admin
 from uuid import UUID
 from utils.autenticacao import pegar_usuario_atual
+from utils.textos import gerar_slug
 from schemas.banco_questoes_schema import (
     BancoQuestoesFiltrosResponse,
     BancoQuestoesListasResponse,
     GerarListaIAResponse,
 )
+from services.ai.factory import get_ai_provider
+from services.ai.base import AIIndisponivelError, AIRespostaInvalidaError
+
+QUANTIDADE_QUESTOES_LISTA_IA = 10
 
 router = APIRouter(
     prefix='/aluno/banco-questoes',
@@ -259,6 +264,72 @@ def listar_listas(
         )
 
 
+# Matéria com a maior taxa de erro do usuário, a partir de tentativas_questoes
+# join questoes.materia_id. Retorna None se não houver erros o suficiente.
+def materia_com_mais_erros(id_usuario: str) -> dict | None:
+    tentativas_erradas = (
+        supabase_admin.table("tentativas_questoes")
+        .select("questao_id")
+        .eq("usuario_id", id_usuario)
+        .eq("acertou", False)
+        .execute()
+        .data or []
+    )
+
+    if not tentativas_erradas:
+        return None
+
+    ids_questoes = list({t["questao_id"] for t in tentativas_erradas})
+
+    questoes = (
+        supabase_admin.table("questoes")
+        .select("id, materia_id")
+        .in_("id", ids_questoes)
+        .execute()
+        .data or []
+    )
+
+    contagem_por_materia: dict[str, int] = {}
+    for questao in questoes:
+        materia_id = questao["materia_id"]
+        contagem_por_materia[materia_id] = contagem_por_materia.get(materia_id, 0) + 1
+
+    if not contagem_por_materia:
+        return None
+
+    materia_id_mais_errada = max(contagem_por_materia, key=contagem_por_materia.get)
+
+    materia = (
+        supabase_admin.table("materias")
+        .select("id, nome")
+        .eq("id", materia_id_mais_errada)
+        .limit(1)
+        .execute()
+        .data
+    )
+
+    return materia[0] if materia else None
+
+
+def gerar_slug_unico_lista(titulo: str) -> str:
+    slug_base = gerar_slug(titulo)
+    slug = slug_base
+    sufixo = 1
+
+    while (
+        supabase_admin.table("listas_questoes")
+        .select("id")
+        .eq("slug", slug)
+        .limit(1)
+        .execute()
+        .data
+    ):
+        sufixo += 1
+        slug = f"{slug_base}-{sufixo}"
+
+    return slug
+
+
 @router.post('/listas/gerar-ia', status_code=201, response_model=GerarListaIAResponse)
 def gerar_lista_ia(usuario_atual=Depends(pegar_usuario_atual)):
     try:
@@ -277,12 +348,109 @@ def gerar_lista_ia(usuario_atual=Depends(pegar_usuario_atual)):
                 detail="Não há dados suficientes para gerar uma lista personalizada"
             )
 
-        # TODO: integração com o mecanismo de IA para gerar listas personalizadas
-        # ainda não implementada. Aguardando definição do serviço responsável.
-        raise HTTPException(
-            status_code=422,
-            detail="Geração automática de listas ainda não disponível"
+        materia = materia_com_mais_erros(id_usuario)
+        if not materia:
+            raise HTTPException(
+                status_code=422,
+                detail="Não há dados suficientes para gerar uma lista personalizada"
+            )
+
+        try:
+            questoes_geradas = get_ai_provider().gerar_questoes(
+                materia=materia["nome"],
+                topico=materia["nome"],
+                quantidade=QUANTIDADE_QUESTOES_LISTA_IA,
+            )
+        except (AIIndisponivelError, AIRespostaInvalidaError) as erro:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Não foi possível gerar questões com IA: {erro}"
+            )
+
+        if not questoes_geradas:
+            raise HTTPException(
+                status_code=502,
+                detail="A IA não retornou nenhuma questão"
+            )
+
+        titulo = f"Lista personalizada — {materia['nome']}"
+        nova_lista = {
+            "titulo": titulo,
+            "slug": gerar_slug_unico_lista(titulo),
+            "materia_id": materia["id"],
+            "tipo_prova_id": None,
+            "topico_id": None,
+            "dificuldade": None,
+            "tipo_lista": "gerada_ia",
+        }
+
+        resposta_lista = supabase_admin.table("listas_questoes").insert(nova_lista).execute()
+
+        if not resposta_lista.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Não foi possível criar a lista de questões"
+            )
+
+        lista_id = resposta_lista.data[0]["id"]
+
+        for ordem, questao_gerada in enumerate(questoes_geradas):
+            nova_questao = {
+                "materia_id": materia["id"],
+                "dificuldade": questao_gerada.get("dificuldade") or "medio",
+                "enunciado": questao_gerada["enunciado"],
+                "explicacao": questao_gerada.get("explicacao"),
+                "ativo": True,
+                "alternativa_correta": None,
+            }
+
+            resposta_questao = supabase_admin.table("questoes").insert(nova_questao).execute()
+            if not resposta_questao.data:
+                continue
+
+            questao_id = resposta_questao.data[0]["id"]
+
+            letras = ["A", "B", "C", "D", "E"]
+            id_alternativa_correta = None
+            for indice, texto_alternativa in enumerate(questao_gerada.get("alternativas", [])):
+                letra = letras[indice] if indice < len(letras) else str(indice)
+                resposta_alternativa = (
+                    supabase_admin.table("alternativas_questao")
+                    .insert({
+                        "questao_id": questao_id,
+                        "letra": letra,
+                        "conteudo": texto_alternativa,
+                        "ordem": indice,
+                    })
+                    .execute()
+                )
+                if letra == questao_gerada.get("resposta_correta"):
+                    id_alternativa_correta = resposta_alternativa.data[0]["id"]
+
+            if id_alternativa_correta:
+                supabase_admin.table("questoes").update(
+                    {"alternativa_correta": id_alternativa_correta}
+                ).eq("id", questao_id).execute()
+
+            supabase_admin.table("itens_lista_questoes").insert({
+                "lista_questoes_id": lista_id,
+                "questao_id": questao_id,
+                "ordem": ordem,
+            }).execute()
+
+        lista_criada = (
+            supabase_admin.table("listas_questoes")
+            .select("*")
+            .eq("id", lista_id)
+            .limit(1)
+            .execute()
+            .data[0]
         )
+
+        return {
+            "id": lista_criada["id"],
+            "slug": lista_criada.get("slug"),
+        }
 
     except HTTPException:
         raise

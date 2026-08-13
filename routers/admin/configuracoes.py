@@ -2,10 +2,10 @@ from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, 
 from database import supabase_admin
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
-import json
-import os
 import time
 from utils.autenticacao import exigir_administrador
+from services.ai.base import AIIndisponivelError
+from services.ai.factory import get_ai_provider
 from schemas.configuracoes_schema import (
     ConfiguracoesGeraisEditar,
     ConfiguracoesAutenticacaoEditar,
@@ -20,12 +20,6 @@ router = APIRouter(
     prefix='/admin/configuracoes',
     tags=['Admin - Configurações'],
     dependencies=[Depends(exigir_administrador)]
-)
-
-# TODO: migrate to a "configuracoes" (key/value) table in Supabase; currently persisted to a local file
-CAMINHO_CONFIGURACOES = os.getenv(
-    "CONFIG_DATA_PATH",
-    os.path.join(os.path.dirname(__file__), "..", "..", "dados_configuracoes.json"),
 )
 
 CONFIGURACOES_PADRAO = {
@@ -115,22 +109,35 @@ CONFIGURACOES_PADRAO = {
 }
 
 
-# Reads the configuration file, creating it with default values if it doesn't exist yet
+# Reads all configuration sections from the "configuracoes" table, seeding
+# any missing section (chave) with its default value on first read
 def carregar_configuracoes():
-    if not os.path.exists(CAMINHO_CONFIGURACOES):
-        salvar_configuracoes(CONFIGURACOES_PADRAO)
-        return json.loads(json.dumps(CONFIGURACOES_PADRAO))
+    resposta = supabase_admin.table("configuracoes").select("chave, valor").execute()
+    linhas = {linha["chave"]: linha["valor"] for linha in (resposta.data or [])}
 
-    with open(CAMINHO_CONFIGURACOES, "r", encoding="utf-8") as arquivo:
-        return json.load(arquivo)
+    configuracoes = {}
+    for chave, valor_padrao in CONFIGURACOES_PADRAO.items():
+        if chave in linhas:
+            configuracoes[chave] = linhas[chave]
+        else:
+            supabase_admin.table("configuracoes").upsert({
+                "chave": chave,
+                "valor": valor_padrao,
+            }).execute()
+            configuracoes[chave] = valor_padrao
+
+    return configuracoes
 
 
-# Writes the entire configuration dictionary to the file
+# Writes each top-level section of the configuration dictionary to its own
+# row (chave/valor) in the "configuracoes" table
 def salvar_configuracoes(configuracoes: dict):
-    diretorio = os.path.dirname(os.path.abspath(CAMINHO_CONFIGURACOES))
-    os.makedirs(diretorio, exist_ok=True)
-    with open(CAMINHO_CONFIGURACOES, "w", encoding="utf-8") as arquivo:
-        json.dump(configuracoes, arquivo, ensure_ascii=False, indent=2)
+    for chave, valor in configuracoes.items():
+        supabase_admin.table("configuracoes").upsert({
+            "chave": chave,
+            "valor": valor,
+            "atualizado_em": datetime.now(timezone.utc).isoformat(),
+        }).execute()
 
 
 # Masks an api_key, keeping only the last 4 characters visible
@@ -395,13 +402,27 @@ def editar_configuracoes_ia(dados: ConfiguracoesIaEditar):
 @router.post('/ia/testar')
 def testar_configuracoes_ia(dados: ConfiguracoesIaTestar):
     try:
-        # TODO: integrate with the real AI provider (e.g. Anthropic API) using the received parameters
+        # NOTE: usa o provider configurado globalmente (get_ai_provider() é um
+        # singleton cacheado, construído a partir das variáveis de ambiente em
+        # config.py). Este teste sempre roda contra o modelo atualmente
+        # configurado, ignorando dados.modelo/temperatura/max_tokens do
+        # request — simplificação aceitável para este endpoint de diagnóstico.
+        provider = get_ai_provider()
+
+        mensagens = []
+        if dados.prompt_base:
+            mensagens.append({"role": "system", "content": dados.prompt_base})
+        mensagens.append({"role": "user", "content": dados.prompt_teste})
+
         inicio = time.time()
 
-        resposta_texto = (
-            f"[Simulação] Resposta gerada pelo modelo {dados.modelo} "
-            f"para o prompt: \"{dados.prompt_teste}\""
-        )
+        try:
+            resposta_texto = provider.responder_chat(mensagens)
+        except AIIndisponivelError as erro:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Não foi possível se comunicar com o provedor de IA: {erro}"
+            )
 
         tempo_resposta_ms = int((time.time() - inicio) * 1000)
         tokens_utilizados = len(dados.prompt_base.split()) + len(dados.prompt_teste.split()) + len(resposta_texto.split())
@@ -412,6 +433,9 @@ def testar_configuracoes_ia(dados: ConfiguracoesIaTestar):
             "tokens_utilizados": tokens_utilizados,
             "tempo_resposta_ms": tempo_resposta_ms,
         }
+
+    except HTTPException:
+        raise
 
     except Exception as erro:
         print(f"Erro ao testar configurações de IA: {erro}")

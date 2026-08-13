@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from database import supabase_admin
 from uuid import UUID
-from utils.autenticacao import exigir_administrador
+from utils.autenticacao import exigir_administrador, pegar_usuario_atual
 from schemas.usuario_schema import (
     UsuarioCriar,
     UsuarioEditar,
@@ -41,10 +41,66 @@ ORDENACAO = {
 }
 
 
+# Fetches the estatisticas_usuario row for a single user (or defaults)
+def obter_estatisticas(usuario_id: str) -> dict:
+    resposta = (
+        supabase_admin.table("estatisticas_usuario")
+        .select("ofensiva_atual_dias, maior_ofensiva_dias, xp_total")
+        .eq("usuario_id", usuario_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if resposta:
+        return resposta[0]
+    return {"ofensiva_atual_dias": 0, "maior_ofensiva_dias": 0, "xp_total": 0}
+
+
 # Builds the UsuarioDetalhe-shaped dict from a perfil row + auth user
 def montar_usuario_detalhe(perfil: dict, usuario_auth=None):
     email = usuario_auth.user.email if usuario_auth and usuario_auth.user else perfil.get("email", "")
     email_confirmado_em = usuario_auth.user.email_confirmed_at if usuario_auth and usuario_auth.user else None
+
+    usuario_id = perfil["id"]
+    estatisticas = obter_estatisticas(usuario_id)
+
+    respostas = (
+        supabase_admin.table("respostas_lista_questoes_aluno")
+        .select("correta")
+        .eq("usuario_id", usuario_id)
+        .execute()
+        .data or []
+    )
+    questoes_respondidas = len(respostas)
+    acertos = sum(1 for r in respostas if r["correta"])
+    taxa_acerto = round((acertos / questoes_respondidas) * 100, 1) if questoes_respondidas else 0
+
+    atividades = (
+        supabase_admin.table("atividade_diaria")
+        .select("minutos_estudo")
+        .eq("usuario_id", usuario_id)
+        .execute()
+        .data or []
+    )
+    tempo_estudo_min = sum(a["minutos_estudo"] for a in atividades)
+
+    listas_concluidas = (
+        supabase_admin.table("progresso_lista_questoes_aluno")
+        .select("id", count="exact")
+        .eq("usuario_id", usuario_id)
+        .eq("status", "finalizada")
+        .execute()
+        .count or 0
+    )
+
+    provas_realizadas = (
+        supabase_admin.table("sessoes_simulado")
+        .select("id", count="exact")
+        .eq("usuario_id", usuario_id)
+        .eq("status", "concluido")
+        .execute()
+        .count or 0
+    )
 
     return {
         "id": perfil["id"],
@@ -57,15 +113,15 @@ def montar_usuario_detalhe(perfil: dict, usuario_auth=None):
         "criado_em": perfil.get("criado_em"),
         "ultimo_acesso": None,
         "email_verificado": bool(email_confirmado_em) if usuario_auth else bool(perfil.get("email_verificado")),
-        # TODO: gamification fields (ofensiva, xp, taxa_acerto etc.) depend on tables that don't exist yet
-        "ofensiva_atual": 0,
-        "maior_ofensiva": 0,
-        "xp": 0,
-        "questoes_respondidas": 0,
-        "taxa_acerto": 0,
-        "tempo_estudo_min": 0,
-        "listas_concluidas": 0,
-        "provas_realizadas": 0,
+        "ofensiva_atual": estatisticas.get("ofensiva_atual_dias", 0),
+        "maior_ofensiva": estatisticas.get("maior_ofensiva_dias", 0),
+        "xp": estatisticas.get("xp_total", 0),
+        "questoes_respondidas": questoes_respondidas,
+        "taxa_acerto": taxa_acerto,
+        "tempo_estudo_min": tempo_estudo_min,
+        "listas_concluidas": listas_concluidas,
+        "provas_realizadas": provas_realizadas,
+        # ranking_geral ainda não tem tabela/cálculo de ranking global — sem dado real disponível
         "ranking_geral": 0,
     }
 
@@ -109,6 +165,16 @@ def listar_usuarios(
         todos_usuarios_auth = supabase_admin.auth.admin.list_users()
         emails_por_id = {usuario.id: usuario.email for usuario in todos_usuarios_auth}
 
+        ids_perfis = [perfil["id"] for perfil in perfis]
+        estatisticas_linhas = (
+            supabase_admin.table("estatisticas_usuario")
+            .select("usuario_id, ofensiva_atual_dias, xp_total")
+            .in_("usuario_id", ids_perfis)
+            .execute()
+            .data or []
+        ) if ids_perfis else []
+        estatisticas_por_usuario = {linha["usuario_id"]: linha for linha in estatisticas_linhas}
+
         usuarios = [
             {
                 "id": perfil["id"],
@@ -117,9 +183,8 @@ def listar_usuarios(
                 "avatar_url": perfil.get("avatar_url"),
                 "cargo": perfil["tipo_usuario"],
                 "status": SITUACAO_PARA_STATUS.get(perfil["situacao"], perfil["situacao"]),
-                # TODO: ofensiva_atual and xp depend on gamification tables that don't exist yet
-                "ofensiva_atual": 0,
-                "xp": 0,
+                "ofensiva_atual": estatisticas_por_usuario.get(perfil["id"], {}).get("ofensiva_atual_dias", 0),
+                "xp": estatisticas_por_usuario.get(perfil["id"], {}).get("xp_total", 0),
                 "ultimo_acesso": None,
             }
             for perfil in perfis
@@ -131,6 +196,11 @@ def listar_usuarios(
         total_ativos = sum(1 for perfil in perfis if perfil["situacao"] == "ativo")
         total_suspensos = sum(1 for perfil in perfis if perfil["situacao"] == "suspenso")
 
+        ofensiva_media = (
+            round(sum(usuario["ofensiva_atual"] for usuario in usuarios) / len(usuarios), 1)
+            if usuarios else 0
+        )
+
         return {
             "sucesso": True,
             "pagina": pagina,
@@ -139,7 +209,7 @@ def listar_usuarios(
             "total_usuarios": total_registros,
             "total_ativos": total_ativos,
             "total_suspensos": total_suspensos,
-            "ofensiva_media": 0,
+            "ofensiva_media": ofensiva_media,
             "usuarios": usuarios,
         }
 
@@ -368,10 +438,18 @@ def obter_historico_ofensiva(usuario_id: UUID):
                 detail="Usuário não encontrado"
             )
 
-        # TODO: depends on a streak-history table that doesn't exist yet
+        historico_resposta = (
+            supabase_admin.table("streak_historico")
+            .select("data, ofensiva_dias")
+            .eq("usuario_id", str(usuario_id))
+            .order("data", desc=False)
+            .execute()
+            .data or []
+        )
+
         return {
             "sucesso": True,
-            "historico": [],
+            "historico": historico_resposta,
         }
 
     except HTTPException:
@@ -402,10 +480,31 @@ def obter_conquistas(usuario_id: UUID):
                 detail="Usuário não encontrado"
             )
 
-        # TODO: depends on an achievements table that doesn't exist yet
+        desbloqueadas_banco = (
+            supabase_admin.table("conquistas_usuario")
+            .select("conquista_id, desbloqueado_em, conquistas(titulo, descricao, icone, raridade, xp_recompensa)")
+            .eq("usuario_id", str(usuario_id))
+            .order("desbloqueado_em", desc=True)
+            .execute()
+            .data or []
+        )
+
+        conquistas = [
+            {
+                "id": linha["conquista_id"],
+                "titulo": (linha.get("conquistas") or {}).get("titulo"),
+                "descricao": (linha.get("conquistas") or {}).get("descricao"),
+                "icone": (linha.get("conquistas") or {}).get("icone"),
+                "raridade": (linha.get("conquistas") or {}).get("raridade"),
+                "xp": (linha.get("conquistas") or {}).get("xp_recompensa"),
+                "desbloqueado_em": linha["desbloqueado_em"],
+            }
+            for linha in desbloqueadas_banco
+        ]
+
         return {
             "sucesso": True,
-            "conquistas": [],
+            "conquistas": conquistas,
         }
 
     except HTTPException:
@@ -440,13 +539,28 @@ def obter_historico_atividades(
                 detail="Usuário não encontrado"
             )
 
-        # TODO: depends on an activity-log table that doesn't exist yet
+        inicio = (pagina - 1) * limite
+        fim = inicio + limite - 1
+
+        consulta = (
+            supabase_admin.table("log_atividade")
+            .select("id, tipo, descricao, metadata, criado_em", count="exact")
+            .eq("usuario_id", str(usuario_id))
+            .order("criado_em", desc=True)
+            .range(inicio, fim)
+            .execute()
+        )
+
+        itens = consulta.data or []
+        total_registros = consulta.count or 0
+        total_paginas = (total_registros + limite - 1) // limite
+
         return {
             "sucesso": True,
             "pagina": pagina,
             "limite": limite,
-            "total_paginas": 0,
-            "itens": [],
+            "total_paginas": total_paginas,
+            "itens": itens,
         }
 
     except HTTPException:
@@ -477,10 +591,18 @@ def obter_medidas(usuario_id: UUID):
                 detail="Usuário não encontrado"
             )
 
-        # TODO: depends on an administrative-actions table that doesn't exist yet
+        medidas = (
+            supabase_admin.table("acoes_administrativas")
+            .select("id, tipo, motivo, duracao_dias, administrador_id, criado_em")
+            .eq("usuario_id", str(usuario_id))
+            .order("criado_em", desc=True)
+            .execute()
+            .data or []
+        )
+
         return {
             "sucesso": True,
-            "medidas": [],
+            "medidas": medidas,
         }
 
     except HTTPException:
@@ -541,7 +663,7 @@ def obter_timeline(usuario_id: UUID):
 
 
 @router.post('/{usuario_id}/suspender')
-def suspender_usuario(usuario_id: UUID, dados: UsuarioSuspender):
+def suspender_usuario(usuario_id: UUID, dados: UsuarioSuspender, usuario_atual=Depends(pegar_usuario_atual)):
     try:
         resposta = (
             supabase_admin.table("perfis")
@@ -556,7 +678,14 @@ def suspender_usuario(usuario_id: UUID, dados: UsuarioSuspender):
                 detail="Usuário não encontrado"
             )
 
-        # TODO: persist motivo/duracao_dias once an administrative-actions table exists
+        supabase_admin.table("acoes_administrativas").insert({
+            "usuario_id": str(usuario_id),
+            "administrador_id": str(usuario_atual.id),
+            "tipo": "suspensao",
+            "motivo": dados.motivo,
+            "duracao_dias": dados.duracao_dias,
+        }).execute()
+
         usuario_auth = supabase_admin.auth.admin.get_user_by_id(str(usuario_id))
         usuario = montar_usuario_detalhe(resposta.data[0], usuario_auth)
 
@@ -578,7 +707,7 @@ def suspender_usuario(usuario_id: UUID, dados: UsuarioSuspender):
 
 
 @router.post('/{usuario_id}/banir')
-def banir_usuario(usuario_id: UUID, dados: UsuarioBanir):
+def banir_usuario(usuario_id: UUID, dados: UsuarioBanir, usuario_atual=Depends(pegar_usuario_atual)):
     try:
         resposta = (
             supabase_admin.table("perfis")
@@ -593,7 +722,13 @@ def banir_usuario(usuario_id: UUID, dados: UsuarioBanir):
                 detail="Usuário não encontrado"
             )
 
-        # TODO: persist motivo once an administrative-actions table exists
+        supabase_admin.table("acoes_administrativas").insert({
+            "usuario_id": str(usuario_id),
+            "administrador_id": str(usuario_atual.id),
+            "tipo": "banimento",
+            "motivo": dados.motivo,
+        }).execute()
+
         usuario_auth = supabase_admin.auth.admin.get_user_by_id(str(usuario_id))
         usuario = montar_usuario_detalhe(resposta.data[0], usuario_auth)
 
@@ -680,7 +815,7 @@ def resetar_senha(usuario_id: UUID):
 
 
 @router.post('/{usuario_id}/resetar-ofensiva')
-def resetar_ofensiva(usuario_id: UUID):
+def resetar_ofensiva(usuario_id: UUID, usuario_atual=Depends(pegar_usuario_atual)):
     try:
         resposta = (
             supabase_admin.table("perfis")
@@ -696,7 +831,16 @@ def resetar_ofensiva(usuario_id: UUID):
                 detail="Usuário não encontrado"
             )
 
-        # TODO: persist reset once a gamification/streak table exists
+        supabase_admin.table("estatisticas_usuario").update({
+            "ofensiva_atual_dias": 0,
+        }).eq("usuario_id", str(usuario_id)).execute()
+
+        supabase_admin.table("acoes_administrativas").insert({
+            "usuario_id": str(usuario_id),
+            "administrador_id": str(usuario_atual.id),
+            "tipo": "reset_ofensiva",
+        }).execute()
+
         usuario_auth = supabase_admin.auth.admin.get_user_by_id(str(usuario_id))
         usuario = montar_usuario_detalhe(resposta.data[0], usuario_auth)
 
