@@ -119,8 +119,16 @@ async def registro(
             }
         ).execute()
         
-        enviar_email_verificacao(email, codigo, nome)
-    
+        try:
+            enviar_email_verificacao(email, codigo, nome)
+        except Exception as erro_email:
+            # A conta e o código já foram persistidos acima — uma falha de
+            # SMTP (ex.: credenciais não configuradas) não pode derrubar um
+            # cadastro que já aconteceu de verdade, senão o usuário fica com
+            # uma conta órfã (existe no banco, mas nunca recebe o código e
+            # vê "email já cadastrado" em qualquer nova tentativa).
+            print(f"Erro ao enviar email de verificação: {erro_email}")
+
         return {
             'sucesso' : True,
             'mensagem' : 'Usuário cadastrado com sucesso!',

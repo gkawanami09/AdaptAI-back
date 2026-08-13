@@ -10,6 +10,8 @@ def enviar_email_verificacao(destinatario: str, codigo: str, nome: str):
     smtp_senha = os.getenv("SMTP_PASSWORD")
     smtp_from = os.getenv("SMTP_FROM", smtp_usuario)
 
+    print(codigo)
+
     mensagem = EmailMessage()
     mensagem["Subject"] = "Seu código de verificação do AdaptAI"
     mensagem["From"] = smtp_from

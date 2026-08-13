@@ -1,17 +1,24 @@
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from database import supabase_admin
-from schemas.onboarding_schema import OnboardingConcluir
+from schemas.onboarding_schema import (
+    OnboardingConcluir,
+    OnboardingResponse,
+    OnboardingConcluirResponse,
+)
+from schemas.plano_estudos_schema import PostCriarPlanoEstudosParams
+from services.plano_estudos_wizard_service import PlanoEstudosWizardService
 from utils.autenticacao import pegar_usuario_atual
-from utils.data_brasil import hoje_brasil
 
 
 router = APIRouter(
     prefix="/onboarding",
     tags=["Onboarding"],
 )
+
+wizard_service = PlanoEstudosWizardService()
 
 
 SLUG_TIPO_PROVA = {
@@ -37,7 +44,11 @@ OBJETIVO_PRINCIPAL = {
 }
 
 SLUG_MATERIA = {
-    "matematica": "math",
+    # Existem duas matérias "matemática" na base (slugs "math" e
+    # "matematica") — só "matematica" (Matemática Universitária) tem
+    # tópicos/aulas cadastrados. "math" está vazia; mapear para lá faria o
+    # onboarding gerar sempre um plano sem conteúdo para essa matéria.
+    "matematica": "matematica",
     "fisica": "fisica",
     "quimica": "quimica",
     "biologia": "biologia",
@@ -139,13 +150,21 @@ def montar_onboarding(usuario_id: str):
             if materia_id in materias_por_id
         ]
 
+    # Prioriza o plano ativo — sem esse filtro, um plano arquivado (ex.: uma
+    # geração anterior que falhou, com tipo_prova_id/data_inicio nulos) pode
+    # vir na frente só por ter sido criado depois. Não filtra por
+    # `criado_por`: o plano pode ter sido gerado pelo motor determinístico
+    # (criado_por="sistema", usado pelo onboarding) ou por IA
+    # (criado_por="ia", usado pelo wizard manual) — o dono da geração não
+    # importa aqui, só se o plano está ativo.
     resposta_plano = (
         supabase_admin.table("planos_estudo")
         .select(
-            "id, tipo_prova_id, titulo, data_inicio, data_fim, status, criado_por"
+            "id, tipo_prova_id, titulo, data_inicio, data_fim, status, "
+            "status_geracao, mensagem_erro, criado_por"
         )
         .eq("usuario_id", usuario_id)
-        .eq("criado_por", "ia")
+        .eq("status", "ativo")
         .order("criado_em", desc=True)
         .limit(1)
         .execute()
@@ -178,7 +197,7 @@ def montar_onboarding(usuario_id: str):
     }
 
 
-@router.get("")
+@router.get("", response_model=OnboardingResponse)
 def obter_onboarding(usuario=Depends(pegar_usuario_atual)):
     try:
         return {
@@ -197,7 +216,7 @@ def obter_onboarding(usuario=Depends(pegar_usuario_atual)):
         )
 
 
-@router.post("/concluir")
+@router.post("/concluir", response_model=OnboardingConcluirResponse)
 def concluir_onboarding(
     dados: OnboardingConcluir,
     usuario=Depends(pegar_usuario_atual),
@@ -278,40 +297,19 @@ def concluir_onboarding(
             .execute()
         )
 
-        dados_plano = {
-            "tipo_prova_id": tipo_prova["id"],
-            "titulo": f"Plano de estudos - {tipo_prova['nome']}",
-            "data_inicio": hoje_brasil().isoformat(),
-            "status": "ativo",
-            "criado_por": "ia",
-            "atualizado_em": agora,
-        }
-
-        resposta_plano = (
-            supabase_admin.table("planos_estudo")
-            .select("id")
-            .eq("usuario_id", usuario_id)
-            .eq("criado_por", "ia")
-            .eq("status", "ativo")
-            .order("criado_em", desc=True)
-            .limit(1)
-            .execute()
+        # Gera o plano de estudos de verdade (sessões + tarefas), reaproveitando
+        # o mesmo motor usado pelo wizard manual (POST /aluno/plano-estudos).
+        # criar_plano já arquiva qualquer plano ativo anterior do usuário antes
+        # de criar o novo, e nunca levanta exceção — em caso de falha na
+        # geração, retorna o plano com status_geracao="erro" em vez de estourar.
+        params_plano = PostCriarPlanoEstudosParams(
+            provas=[SLUG_TIPO_PROVA[dados.objetivo]],
+            materias=slugs_materias,
+            tempo_por_dia_minutos=MINUTOS_ESTUDO[dados.tempo_estudo],
+            dias_estudo=dados.dias_estudo,
+            usar_ia=False,
         )
-
-        if resposta_plano.data:
-            (
-                supabase_admin.table("planos_estudo")
-                .update(dados_plano)
-                .eq("id", resposta_plano.data[0]["id"])
-                .execute()
-            )
-        else:
-            dados_plano["usuario_id"] = usuario_id
-            (
-                supabase_admin.table("planos_estudo")
-                .insert(dados_plano)
-                .execute()
-            )
+        wizard_service.criar_plano(usuario_id, params_plano)
 
         resposta_configuracoes = (
             supabase_admin.table("configuracoes_usuario")

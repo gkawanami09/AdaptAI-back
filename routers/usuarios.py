@@ -3,6 +3,7 @@ from database import supabase, supabase_admin
 from utils.validacao import validar_senha_forte
 from utils.autenticacao import pegar_usuario_atual
 from uuid import uuid4
+from schemas.usuario_schema import UsuarioPerfilResponse, UsuarioPerfilEditadoResponse
 
 router = APIRouter(
     prefix="/usuarios",
@@ -10,7 +11,41 @@ router = APIRouter(
 )
 
 
-@router.get("/perfil")
+# Junta o perfil (tabela perfis) com o e-mail (Supabase Auth, não fica em
+# perfis) e nível/xp (estatisticas_usuario) — resposta única e tipada que o
+# front usa para nome/foto/cargo e para exibir nível/xp sem uma segunda
+# chamada à API de gamificação.
+def montar_perfil(perfil: dict, email: str) -> dict:
+    id_usuario = perfil["id"]
+
+    estatisticas = (
+        supabase_admin
+        .table("estatisticas_usuario")
+        .select("xp_total, nivel")
+        .eq("usuario_id", id_usuario)
+        .limit(1)
+        .execute()
+        .data
+    )
+
+    xp = estatisticas[0]["xp_total"] if estatisticas else 0
+    nivel = estatisticas[0]["nivel"] if estatisticas else 1
+
+    return {
+        "id": id_usuario,
+        "nome": perfil["nome"],
+        "email": email,
+        "avatar_url": perfil.get("avatar_url"),
+        "tipo_usuario": perfil["tipo_usuario"],
+        "escola_nome": perfil.get("escola_nome"),
+        "situacao": perfil["situacao"],
+        "email_verificado": bool(perfil.get("email_verificado")),
+        "nivel": nivel,
+        "xp": xp,
+    }
+
+
+@router.get("/perfil", response_model=UsuarioPerfilResponse)
 def perfil(usuario_atual= Depends(pegar_usuario_atual)):
     try:
         id_usuario = usuario_atual.id
@@ -18,7 +53,7 @@ def perfil(usuario_atual= Depends(pegar_usuario_atual)):
         resposta = (
             supabase_admin
             .table("perfis")
-            .select("id, nome, escola_nome, avatar_url, situacao, email_verificado")
+            .select("id, nome, escola_nome, avatar_url, situacao, email_verificado, tipo_usuario")
             .eq("id", id_usuario)
             .limit(1)
             .execute()
@@ -32,7 +67,7 @@ def perfil(usuario_atual= Depends(pegar_usuario_atual)):
 
         return {
             "sucesso": True,
-            "usuario": resposta.data[0]
+            "usuario": montar_perfil(resposta.data[0], usuario_atual.email),
         }
 
     except HTTPException:
@@ -44,7 +79,7 @@ def perfil(usuario_atual= Depends(pegar_usuario_atual)):
             detail=f"Erro interno ao buscar usuário: {str(erro)}"
         )
         
-@router.patch('/edicao')
+@router.patch('/edicao', response_model=UsuarioPerfilEditadoResponse)
 async def edicao(
     nome: str | None = Form(None),
     escola_nome: str | None = Form(None),
@@ -150,7 +185,7 @@ async def edicao(
         return {
             "sucesso": True,
             "mensagem": "Perfil atualizado com sucesso.",
-            "usuario": resposta.data[0]
+            "usuario": montar_perfil(resposta.data[0], usuario.email),
         }
 
     except HTTPException:
