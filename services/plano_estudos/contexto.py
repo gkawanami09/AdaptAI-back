@@ -17,6 +17,8 @@ class AulaContexto:
     duracao_minutos: int
     ordem_topico: int
     ordem_aula: int
+    mais_cobrado: bool = False
+    dificuldade: str = "medio"
 
 
 @dataclass(frozen=True)

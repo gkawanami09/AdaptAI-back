@@ -55,3 +55,40 @@ WHERE a.slug LIKE 'teste-%'
   AND NOT EXISTS (
     SELECT 1 FROM public.aulas_texto at2 WHERE at2.aulas_conteudo_id = ac.id
   );
+
+-- 4) 1 aula por matéria não é o bastante para preencher mais que um único
+-- dia: o gerador determinístico só reaproveita aulas como revisão quando a
+-- prova está a ≤60 dias (fase "misto"/"revisao" — ver
+-- services/plano_estudos/deterministic_generator.py). Enquanto a fase é
+-- "novo", sem aula nova a sessão do dia fica vazia — resultado observado:
+-- só o primeiro dia tinha tarefas, o resto virava "Descanso" mesmo com
+-- todos os dias marcados para estudar. Cadastra mais 12 aulas de teste por
+-- matéria (13 no total, contando a da seção 1) para cobrir várias semanas
+-- de conteúdo "novo" antes de precisar cair em revisão.
+INSERT INTO public.aulas (materia_id, titulo, slug, resumo, dificuldade, ativo, ordem)
+SELECT m.id, '[TESTE] ' || m.nome || ' - Aula ' || serie.indice, 'teste-' || m.slug || '-' || lpad(serie.indice::text, 2, '0'),
+       'Aula de teste gerada para destravar o plano de estudos.', 'basico', true, serie.indice
+FROM public.materias m
+CROSS JOIN generate_series(1, 12) AS serie(indice)
+WHERE m.slug IN ('matematica', 'fisica', 'quimica', 'biologia', 'historia', 'geografia', 'portugues', 'redacao', 'ingles')
+  AND NOT EXISTS (
+    SELECT 1 FROM public.aulas a WHERE a.slug = 'teste-' || m.slug || '-' || lpad(serie.indice::text, 2, '0')
+  );
+
+INSERT INTO public.aulas_conteudo (id, aula_id, ordem, id_tipo, duracao, ativo, atualizado_em)
+SELECT gen_random_uuid(), a.id, 1, tipo.id, 20, true, now()
+FROM public.aulas a
+CROSS JOIN (SELECT id FROM public.aulas_tipos WHERE nome = 'texto' LIMIT 1) tipo
+WHERE a.slug ~ '^teste-.+-\d{2}$'
+  AND NOT EXISTS (
+    SELECT 1 FROM public.aulas_conteudo ac WHERE ac.aula_id = a.id
+  );
+
+INSERT INTO public.aulas_texto (aulas_conteudo_id, titulo, descricao, atualizado_em)
+SELECT ac.id, a.titulo, 'Conteúdo de teste — substituir por material real.', now()
+FROM public.aulas_conteudo ac
+JOIN public.aulas a ON a.id = ac.aula_id
+WHERE a.slug ~ '^teste-.+-\d{2}$'
+  AND NOT EXISTS (
+    SELECT 1 FROM public.aulas_texto at2 WHERE at2.aulas_conteudo_id = ac.id
+  );

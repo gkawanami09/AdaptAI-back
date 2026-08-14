@@ -21,6 +21,21 @@ PESO_MATERIA_SEM_PROVA_RELACIONADA = 1e-6
 LIMITE_DIAS_FASE_MISTA = 60
 LIMITE_DIAS_FASE_REVISAO = 30
 
+# Aulas mais cobradas no vestibular vão primeiro na fila de cada matéria;
+# dentro do mesmo nível de importância, as mais básicas vêm antes das
+# difíceis — empates remanescentes preservam a ordem curricular original
+# (ordem_topico, ordem_aula).
+DIFICULDADE_PESO = {"basico": 0, "medio": 1, "dificil": 2}
+
+
+def _prioridade_aula(aula: AulaContexto) -> tuple:
+    return (
+        0 if aula.mais_cobrado else 1,
+        DIFICULDADE_PESO.get(aula.dificuldade, 1),
+        aula.ordem_topico,
+        aula.ordem_aula,
+    )
+
 
 def _peso_prova(dias_ate: int | None) -> float:
     if dias_ate is None:
@@ -59,18 +74,32 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
     100% determinístico e testável com dados fixos.
     """
 
-    def gerar(self, contexto: PlanoEstudosContexto) -> PlanoGerado:
-        hoje = contexto.data_inicio
+    def gerar(
+        self,
+        contexto: PlanoEstudosContexto,
+        historico_inicial: dict[str, list[AulaContexto]] | None = None,
+        aulas_ja_usadas: set[str] | None = None,
+        data_inicio_override: date | None = None,
+    ) -> PlanoGerado:
+        """`historico_inicial`/`aulas_ja_usadas`/`data_inicio_override` existem
+        para o replanejamento (services/plano_estudos_wizard_service.py:
+        `replanejar_apos_conclusao`) retomar a partir do que o aluno já
+        estudou de verdade, em vez de gerar o cronograma do zero. Na criação
+        do plano, esses parâmetros ficam com o padrão (geração do zero).
+        """
+        hoje = data_inicio_override or contexto.data_inicio
         periodo_fim, provas_validas, avisos = calcular_periodo(contexto)
 
         materias_ordenadas = self._priorizar_materias(contexto, provas_validas, hoje)
+        aulas_ja_usadas = aulas_ja_usadas or set()
 
         filas: dict[str, deque[AulaContexto]] = {}
         for materia in materias_ordenadas:
             aulas = contexto.aulas_por_materia.get(materia, [])
-            aptas = [a for a in aulas if a.duracao_minutos <= contexto.tempo_por_dia_minutos]
+            candidatas = [a for a in aulas if a.id not in aulas_ja_usadas]
+            aptas = [a for a in candidatas if a.duracao_minutos <= contexto.tempo_por_dia_minutos]
 
-            ignoradas = len(aulas) - len(aptas)
+            ignoradas = len(candidatas) - len(aptas)
             if ignoradas:
                 avisos.append(
                     f"{ignoradas} aula(s) de '{materia}' ignorada(s): duração maior que o "
@@ -80,15 +109,22 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             if not aulas:
                 avisos.append(f"Matéria '{materia}' não possui aulas cadastradas no banco.")
 
+            aptas.sort(key=_prioridade_aula)
             filas[materia] = deque(aptas)
 
-        historico: dict[str, list[AulaContexto]] = {materia: [] for materia in materias_ordenadas}
+        historico: dict[str, list[AulaContexto]] = {
+            materia: list((historico_inicial or {}).get(materia, []))
+            for materia in materias_ordenadas
+        }
+        # Cursor de rotação da revisão por matéria — evita repetir sempre a
+        # mesma aula (ver _sessao_revisao).
+        indice_revisao: dict[str, int] = {materia: 0 for materia in materias_ordenadas}
 
         dias_gerados: list[DiaGerado] = []
         for dia in dias_calendario(hoje, periodo_fim, contexto.dias_estudo):
             fase = _fase_do_dia(dia, provas_validas)
             sessoes = self._distribuir_dia(
-                fase, materias_ordenadas, filas, historico, contexto.tempo_por_dia_minutos
+                fase, materias_ordenadas, filas, historico, indice_revisao, contexto.tempo_por_dia_minutos
             )
             if sessoes:
                 dias_gerados.append(DiaGerado(data=dia, sessoes=sessoes))
@@ -138,6 +174,7 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
         materias_ordenadas: list[str],
         filas: dict[str, deque[AulaContexto]],
         historico: dict[str, list[AulaContexto]],
+        indice_revisao: dict[str, int],
         tempo_por_dia_minutos: int,
     ) -> list[SessaoGerada]:
         if not materias_ordenadas:
@@ -157,7 +194,7 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             sessao = None
 
             if fase == "revisao" and historico[materia]:
-                sessao = self._sessao_revisao(materia, historico, restante)
+                sessao = self._sessao_revisao(materia, historico, indice_revisao, restante)
 
             if sessao is None and filas[materia] and filas[materia][0].duracao_minutos <= restante:
                 aula = filas[materia].popleft()
@@ -171,7 +208,7 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
                 historico[materia].append(aula)
 
             if sessao is None and fase in ("misto", "revisao"):
-                sessao = self._sessao_revisao(materia, historico, restante)
+                sessao = self._sessao_revisao(materia, historico, indice_revisao, restante)
 
             if sessao is not None:
                 sessoes.append(sessao)
@@ -180,14 +217,25 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
         return sessoes
 
     def _sessao_revisao(
-        self, materia: str, historico: dict[str, list[AulaContexto]], restante: int
+        self,
+        materia: str,
+        historico: dict[str, list[AulaContexto]],
+        indice_revisao: dict[str, int],
+        restante: int,
     ) -> SessaoGerada | None:
-        if not historico[materia]:
+        aulas_vistas = historico[materia]
+        if not aulas_vistas:
             return None
 
-        aula = historico[materia][-1]
+        # Circula por todas as aulas já vistas da matéria em vez de sempre
+        # repetir a última — sem isso, a fase de revisão (que pode durar
+        # semanas) mostra a mesma aula todo santo dia.
+        indice = indice_revisao[materia] % len(aulas_vistas)
+        aula = aulas_vistas[indice]
         if aula.duracao_minutos > restante:
             return None
+
+        indice_revisao[materia] = indice + 1
 
         return SessaoGerada(
             materia=materia,

@@ -6,7 +6,7 @@ from services.plano_estudos.deterministic_generator import DeterministicPlanGene
 HOJE = date(2026, 1, 5)  # segunda-feira
 
 
-def _aula(id_, materia, titulo, duracao, ordem_topico=0, ordem_aula=0):
+def _aula(id_, materia, titulo, duracao, ordem_topico=0, ordem_aula=0, mais_cobrado=False, dificuldade="medio"):
     return AulaContexto(
         id=id_,
         materia_slug=materia,
@@ -14,6 +14,8 @@ def _aula(id_, materia, titulo, duracao, ordem_topico=0, ordem_aula=0):
         duracao_minutos=duracao,
         ordem_topico=ordem_topico,
         ordem_aula=ordem_aula,
+        mais_cobrado=mais_cobrado,
+        dificuldade=dificuldade,
     )
 
 
@@ -301,3 +303,97 @@ def test_nao_repete_materia_no_mesmo_dia_com_varias_materias_e_pouco_conteudo():
     for dia in plano.dias:
         materias_no_dia = [s.materia for s in dia.sessoes]
         assert len(materias_no_dia) == len(set(materias_no_dia))
+
+
+def test_aula_mais_cobrada_e_servida_antes_das_demais():
+    aulas = [
+        _aula("comum", "matematica", "Aula comum", 20, ordem_topico=1, ordem_aula=1, mais_cobrado=False),
+        _aula("cobrada", "matematica", "Aula mais cobrada", 20, ordem_topico=1, ordem_aula=2, mais_cobrado=True),
+    ]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=20,
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    primeira_sessao = plano.dias[0].sessoes[0]
+    assert primeira_sessao.aula_id == "cobrada"
+
+
+def test_aula_mais_facil_vem_antes_da_dificil_no_mesmo_nivel_de_importancia():
+    aulas = [
+        _aula("dificil", "matematica", "Aula difícil", 20, ordem_topico=1, ordem_aula=1, dificuldade="dificil"),
+        _aula("facil", "matematica", "Aula fácil", 20, ordem_topico=1, ordem_aula=2, dificuldade="basico"),
+    ]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=20,
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    primeira_sessao = plano.dias[0].sessoes[0]
+    assert primeira_sessao.aula_id == "facil"
+
+
+def test_revisao_circula_entre_aulas_ja_vistas_em_vez_de_repetir_a_ultima():
+    # Prova a 40 dias: começa em fase "misto" (ensina a1 e a2 como conteúdo
+    # novo nos 2 primeiros dias) e depois de esgotar a fila cai em revisão
+    # com as duas aulas já no histórico — cenário em que a rotação importa.
+    aulas = [
+        _aula("a1", "matematica", "Aula 1", 20, ordem_aula=1),
+        _aula("a2", "matematica", "Aula 2", 20, ordem_aula=2),
+    ]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=40))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=20,
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    sessoes_revisao = [
+        s.aula_id for dia in plano.dias for s in dia.sessoes if s.tipo == "revisao"
+    ]
+    assert sessoes_revisao, "deveria ter entrado em fase de revisão com a prova a 10 dias"
+    # não pode ficar preso sempre na mesma aula — as duas precisam aparecer
+    assert set(sessoes_revisao) == {"a1", "a2"}
+    # dias consecutivos de revisão não repetem a mesma aula
+    for anterior, atual in zip(sessoes_revisao, sessoes_revisao[1:]):
+        assert anterior != atual
+
+
+def test_replanejamento_nao_reoferece_aula_ja_concluida_e_retoma_historico():
+    aulas = [
+        _aula("a1", "matematica", "Aula 1", 20, ordem_aula=1),
+        _aula("a2", "matematica", "Aula 2", 20, ordem_aula=2),
+    ]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=20,
+    )
+
+    aula_ja_concluida = aulas[0]
+    plano = DeterministicPlanGenerator().gerar(
+        contexto,
+        historico_inicial={"matematica": [aula_ja_concluida]},
+        aulas_ja_usadas={"a1"},
+        data_inicio_override=HOJE + timedelta(days=1),
+    )
+
+    todos_ids = {s.aula_id for dia in plano.dias for s in dia.sessoes if s.tipo == "teoria"}
+    assert "a1" not in todos_ids
+    assert "a2" in todos_ids
+    assert plano.periodo_inicio == HOJE + timedelta(days=1)

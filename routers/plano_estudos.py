@@ -539,7 +539,7 @@ def concluir_tarefa(
         tarefa = (
             supabase_admin
             .table("tarefas_estudo")
-            .select("id, usuario_id, status, duracao_minutos")
+            .select("id, usuario_id, status, duracao_minutos, tipo_tarefa, plano_estudo_id")
             .eq("id", str(tarefa_id))
             .eq("usuario_id", id_usuario)
             .limit(1)
@@ -552,18 +552,31 @@ def concluir_tarefa(
                 detail="Tarefa não encontrada"
             )
 
+        dados_tarefa = tarefa.data[0]
+
         supabase_admin.table("tarefas_estudo").update({
             "status": "concluida",
             "concluido_em": agora.isoformat(),
             "atualizado_em": agora.isoformat(),
         }).eq("id", str(tarefa_id)).execute()
 
-        duracao = tarefa.data[0]["duracao_minutos"] or 0
+        duracao = dados_tarefa["duracao_minutos"] or 0
 
         conceder_xp_e_atividade(id_usuario, 10, minutos_estudo=duracao, agora=agora, tarefas_concluidas=1)
         registrar_evento_gamificacao(
             id_usuario, EventoGamificacao.SESSAO_ESTUDO_CONCLUIDA, {"minutos": duracao}
         )
+
+        if dados_tarefa["tipo_tarefa"] == "aula":
+            registrar_evento_gamificacao(
+                id_usuario, EventoGamificacao.AULA_CONCLUIDA, {"minutos": duracao}
+            )
+            # Replaneja os dias futuros ainda não realizados do plano para
+            # considerar a aula recém-concluída (não repetir/re-oferecer,
+            # e permitir que a revisão gire por ela também). Tarefas
+            # passadas e já concluídas nunca são tocadas.
+            if dados_tarefa.get("plano_estudo_id"):
+                wizard_service.replanejar_apos_conclusao(dados_tarefa["plano_estudo_id"], id_usuario)
 
         return {"sucesso": True}
 
