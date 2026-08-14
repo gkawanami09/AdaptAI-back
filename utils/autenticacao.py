@@ -24,7 +24,13 @@ def pegar_usuario_atual(
     except HTTPException:
         raise
 
-    except Exception:
+    except Exception as erro:
+        # get_user faz uma chamada de rede real ao Supabase Auth a cada
+        # request — falhas transitórias (timeout, instabilidade de rede)
+        # caem aqui e antes viravam 401 indistinguível de token inválido,
+        # sem nenhum log. Logar a causa real para diagnosticar picos de 401
+        # que não são de fato problema de autenticação.
+        print(f"Erro ao validar token (rede/Supabase Auth?): {erro}")
         raise HTTPException(
             status_code=401,
             detail="Usuário não autenticado."

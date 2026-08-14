@@ -32,6 +32,11 @@ class TarefaDoDia(BaseModel):
     concluida: bool
     progresso: Optional[int] = None
     tipo: Literal["aula", "questoes", "lista", "prova", "redacao", "revisao"]
+    # Slug do conteúdo vinculado (aula/lista de questões/tema de redação),
+    # para o front montar o link de destino por tipo. Nulo quando o tipo não
+    # tem tela de deep-link hoje (prova, revisão) ou quando a tarefa não tem
+    # conteúdo vinculado (personalizada).
+    conteudo_slug: Optional[str] = None
 
 
 class BadgeVisaoGeral(BaseModel):

@@ -186,11 +186,16 @@ def obter_plano_estudos(
             .data or []
         ]
 
+        CAMPOS_TAREFA = (
+            "id, titulo, tipo_tarefa, data_agendada, duracao_minutos, status, "
+            "materia_id, aula_id, lista_questoes_id, tema_redacao_id"
+        )
+
         if ids_planos_ativos:
             tarefas_periodo = (
                 supabase_admin
                 .table("tarefas_estudo")
-                .select("id, titulo, tipo_tarefa, data_agendada, duracao_minutos, status, materia_id")
+                .select(CAMPOS_TAREFA)
                 .eq("usuario_id", id_usuario)
                 .in_("plano_estudo_id", ids_planos_ativos)
                 .gte("data_agendada", data_inicio.isoformat())
@@ -204,7 +209,7 @@ def obter_plano_estudos(
             tarefas_semana = (
                 supabase_admin
                 .table("tarefas_estudo")
-                .select("id, titulo, tipo_tarefa, data_agendada, duracao_minutos, status, materia_id")
+                .select(CAMPOS_TAREFA)
                 .eq("usuario_id", id_usuario)
                 .in_("plano_estudo_id", ids_planos_ativos)
                 .gte("data_agendada", semana_inicio.isoformat())
@@ -215,6 +220,45 @@ def obter_plano_estudos(
         else:
             tarefas_periodo = []
             tarefas_semana = []
+
+        # Slugs do conteúdo vinculado a cada tarefa (aula/lista de
+        # questões/tema de redação), para o front montar o link de destino
+        # por tipo (/aulas/:slug, /questoes/:slug, /redacao/:slug).
+        todas_tarefas = tarefas_periodo + tarefas_semana
+        ids_aulas = list({t["aula_id"] for t in todas_tarefas if t.get("aula_id")})
+        ids_listas = list({t["lista_questoes_id"] for t in todas_tarefas if t.get("lista_questoes_id")})
+        ids_temas_redacao = list({t["tema_redacao_id"] for t in todas_tarefas if t.get("tema_redacao_id")})
+
+        slug_por_aula_id = {
+            a["id"]: a["slug"]
+            for a in (
+                supabase_admin.table("aulas").select("id, slug").in_("id", ids_aulas).execute().data or []
+            )
+        } if ids_aulas else {}
+
+        slug_por_lista_id = {
+            l["id"]: l["slug"]
+            for l in (
+                supabase_admin.table("listas_questoes").select("id, slug").in_("id", ids_listas).execute().data or []
+            )
+        } if ids_listas else {}
+
+        slug_por_tema_redacao_id = {
+            t["id"]: t["slug"]
+            for t in (
+                supabase_admin.table("temas_redacao").select("id, slug").in_("id", ids_temas_redacao).execute().data or []
+            )
+        } if ids_temas_redacao else {}
+
+        # Resolve o slug do conteúdo vinculado a uma tarefa, conforme o tipo.
+        def resolver_conteudo_slug(tarefa: dict) -> str | None:
+            if tarefa["tipo_tarefa"] == "aula":
+                return slug_por_aula_id.get(tarefa.get("aula_id"))
+            if tarefa["tipo_tarefa"] == "questoes":
+                return slug_por_lista_id.get(tarefa.get("lista_questoes_id"))
+            if tarefa["tipo_tarefa"] == "redacao":
+                return slug_por_tema_redacao_id.get(tarefa.get("tema_redacao_id"))
+            return None
 
         ids_materias = list({t["materia_id"] for t in (tarefas_periodo + tarefas_semana) if t["materia_id"]})
         materias = (
@@ -294,6 +338,7 @@ def obter_plano_estudos(
                 "concluida": tarefa["status"] == "concluida",
                 "progresso": 100 if tarefa["status"] == "concluida" else (50 if tarefa["status"] == "em_andamento" else None),
                 "tipo": TIPO_TAREFA_PARA_TIPO_CONTRATO.get(tarefa["tipo_tarefa"], "revisao"),
+                "conteudo_slug": resolver_conteudo_slug(tarefa),
             })
 
         visao_geral_semana = []
