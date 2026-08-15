@@ -7,7 +7,13 @@ from database import supabase_admin
 from utils.data_brasil import hoje_brasil
 from schemas.plano_estudos_schema import PostCriarPlanoEstudosParams
 from services.plano_estudos.ai_generator import AIPlanGenerator
-from services.plano_estudos.contexto import AulaContexto, DiaGerado, PlanoEstudosContexto, ProvaContexto
+from services.plano_estudos.contexto import (
+    AulaContexto,
+    DiaGerado,
+    ListaContexto,
+    PlanoEstudosContexto,
+    ProvaContexto,
+)
 from services.plano_estudos.deterministic_generator import DeterministicPlanGenerator
 from services.plano_estudos.generator_base import PlanoEstudosGenerator
 
@@ -86,7 +92,7 @@ class PlanoEstudosWizardService:
 
             raise HTTPException(status_code=422, detail="; ".join(partes))
 
-    def _montar_contexto(self, dados) -> PlanoEstudosContexto:
+    def _montar_contexto(self, usuario_id: str, dados) -> PlanoEstudosContexto:
         hoje = hoje_brasil()
 
         provas_rows = (
@@ -123,6 +129,10 @@ class PlanoEstudosWizardService:
         )
 
         aulas_por_materia = self._aulas_por_materia(materias_rows)
+        taxa_erro_por_materia, taxa_erro_por_topico = self._desempenho_por_materia_e_topico(
+            usuario_id, materia_id_para_slug
+        )
+        listas_por_materia = self._listas_por_materia(materias_rows)
 
         return PlanoEstudosContexto(
             data_inicio=hoje,
@@ -132,7 +142,96 @@ class PlanoEstudosWizardService:
             aulas_por_materia=aulas_por_materia,
             tempo_por_dia_minutos=dados.tempo_por_dia_minutos,
             dias_estudo=dados.dias_estudo,
+            taxa_erro_por_materia=taxa_erro_por_materia,
+            taxa_erro_por_topico=taxa_erro_por_topico,
+            listas_por_materia=listas_por_materia,
         )
+
+    # Abaixo desse número de tentativas em uma matéria/tópico, a taxa de
+    # erro não é confiável o bastante pra influenciar o plano — mesmo
+    # limiar usado no gerador (services/plano_estudos/deterministic_generator.py).
+    _MIN_TENTATIVAS_CONFIAVEL = 5
+
+    def _desempenho_por_materia_e_topico(
+        self, usuario_id: str, materia_id_para_slug: dict[str, str]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Taxa de erro (0-1) do aluno por matéria (chaveada por slug, pra
+        casar com o resto do contexto) e por tópico (chaveada por
+        topico_id), calculada a partir de tentativas_questoes — mesmo
+        padrão de routers/dashboard.py (join `questoes!inner(...)`).
+        """
+        tentativas = (
+            supabase_admin
+            .table("tentativas_questoes")
+            .select("acertou, questoes!inner(materia_id, topico_id)")
+            .eq("usuario_id", usuario_id)
+            .execute()
+            .data or []
+        )
+
+        total_materia: dict[str, int] = {}
+        erros_materia: dict[str, int] = {}
+        total_topico: dict[str, int] = {}
+        erros_topico: dict[str, int] = {}
+
+        for tentativa in tentativas:
+            questao = tentativa.get("questoes") or {}
+            materia_id = questao.get("materia_id")
+            topico_id = questao.get("topico_id")
+            errou = tentativa.get("acertou") is False
+
+            if materia_id:
+                total_materia[materia_id] = total_materia.get(materia_id, 0) + 1
+                if errou:
+                    erros_materia[materia_id] = erros_materia.get(materia_id, 0) + 1
+
+            if topico_id:
+                total_topico[topico_id] = total_topico.get(topico_id, 0) + 1
+                if errou:
+                    erros_topico[topico_id] = erros_topico.get(topico_id, 0) + 1
+
+        taxa_erro_por_materia = {
+            materia_id_para_slug[materia_id]: erros_materia.get(materia_id, 0) / total
+            for materia_id, total in total_materia.items()
+            if total >= self._MIN_TENTATIVAS_CONFIAVEL and materia_id in materia_id_para_slug
+        }
+
+        taxa_erro_por_topico = {
+            topico_id: erros_topico.get(topico_id, 0) / total
+            for topico_id, total in total_topico.items()
+            if total >= self._MIN_TENTATIVAS_CONFIAVEL
+        }
+
+        return taxa_erro_por_materia, taxa_erro_por_topico
+
+    def _listas_por_materia(self, materias_rows: list[dict]) -> dict[str, ListaContexto]:
+        """Uma lista de questões candidata por matéria (a primeira
+        encontrada), usada nas sessões de reforço para matérias em que o
+        aluno erra muito.
+        """
+        ids_materias = [m["id"] for m in materias_rows]
+        if not ids_materias:
+            return {}
+
+        materia_id_para_slug = {m["id"]: m["slug"] for m in materias_rows}
+
+        listas = (
+            supabase_admin
+            .table("listas_questoes")
+            .select("id, materia_id")
+            .in_("materia_id", ids_materias)
+            .execute()
+            .data or []
+        )
+
+        listas_por_materia: dict[str, ListaContexto] = {}
+        for lista in listas:
+            materia_slug = materia_id_para_slug.get(lista.get("materia_id"))
+            if not materia_slug or materia_slug in listas_por_materia:
+                continue
+            listas_por_materia[materia_slug] = ListaContexto(id=lista["id"], materia_slug=materia_slug)
+
+        return listas_por_materia
 
     def _materias_relacionadas_por_prova(
         self, provas_rows: list[dict], ids_provas: list[str], materia_id_para_slug: dict[str, str]
@@ -239,6 +338,7 @@ class PlanoEstudosWizardService:
                 ordem_aula=aula["ordem"],
                 mais_cobrado=bool(aula.get("mais_cobrado")),
                 dificuldade=aula.get("dificuldade") or "medio",
+                topico_id=aula.get("topico_id"),
             ))
 
         for slug, lista in candidatas.items():
@@ -296,7 +396,7 @@ class PlanoEstudosWizardService:
         return plano
 
     def _gerar_e_persistir(self, plano_id: str, usuario_id: str, dados) -> None:
-        contexto = self._montar_contexto(dados)
+        contexto = self._montar_contexto(usuario_id, dados)
         plano_gerado = self._escolher_generator(dados).gerar(contexto)
 
         if plano_gerado.avisos:
@@ -345,6 +445,7 @@ class PlanoEstudosWizardService:
                     "ordem": indice,
                     "aula_id": sessao.aula_id,
                     "titulo": sessao.titulo,
+                    "lista_questoes_id": sessao.lista_questoes_id,
                 })
 
                 materia_id = materia_id_por_slug.get(sessao.materia)
@@ -356,6 +457,7 @@ class PlanoEstudosWizardService:
                     usuario_id=usuario_id,
                     materia_id=materia_id,
                     aula_id=sessao.aula_id,
+                    lista_questoes_id=sessao.lista_questoes_id,
                     titulo=sessao.titulo,
                     tipo=sessao.tipo,
                     data_agendada=dia.data.isoformat(),
@@ -369,17 +471,25 @@ class PlanoEstudosWizardService:
         if tarefas_para_inserir:
             supabase_admin.table("tarefas_estudo").insert(tarefas_para_inserir).execute()
 
+    _TIPO_SESSAO_PARA_TIPO_TAREFA = {
+        "teoria": "aula",
+        "revisao": "revisao",
+        "questoes": "questoes",
+    }
+
     def _montar_tarefa(
         self, plano_id: str, usuario_id: str, materia_id: str, aula_id: str | None,
         titulo: str | None, tipo: str, data_agendada: str, duracao_minutos: int, ordem: int,
+        lista_questoes_id: str | None = None,
     ) -> dict:
         return {
             "plano_estudo_id": plano_id,
             "usuario_id": usuario_id,
             "materia_id": materia_id,
             "aula_id": aula_id,
+            "lista_questoes_id": lista_questoes_id,
             "titulo": titulo or "Sessão de estudo",
-            "tipo_tarefa": "aula" if tipo == "teoria" else "revisao",
+            "tipo_tarefa": self._TIPO_SESSAO_PARA_TIPO_TAREFA.get(tipo, "revisao"),
             "data_agendada": data_agendada,
             "duracao_minutos": duracao_minutos,
             "ordem": ordem,
@@ -429,7 +539,7 @@ class PlanoEstudosWizardService:
             usar_ia=False,
         )
 
-        contexto = self._montar_contexto(dados)
+        contexto = self._montar_contexto(usuario_id, dados)
         aulas_por_id: dict[str, AulaContexto] = {
             aula.id: aula
             for aulas in contexto.aulas_por_materia.values()
@@ -535,7 +645,7 @@ class PlanoEstudosWizardService:
         sessoes = (
             supabase_admin
             .table("planos_estudo_sessoes")
-            .select("materia_slug, data_agendada, duracao_minutos, tipo, ordem, aula_id, titulo")
+            .select("materia_slug, data_agendada, duracao_minutos, tipo, ordem, aula_id, titulo, lista_questoes_id")
             .eq("plano_estudo_id", plano_id)
             .order("data_agendada")
             .order("ordem")
@@ -568,6 +678,7 @@ class PlanoEstudosWizardService:
                 usuario_id=usuario_id,
                 materia_id=materia_id,
                 aula_id=sessao.get("aula_id"),
+                lista_questoes_id=sessao.get("lista_questoes_id"),
                 titulo=sessao.get("titulo"),
                 tipo=sessao["tipo"],
                 data_agendada=sessao["data_agendada"],
@@ -602,7 +713,7 @@ class PlanoEstudosWizardService:
         sessoes = (
             supabase_admin
             .table("planos_estudo_sessoes")
-            .select("materia_slug, data_agendada, duracao_minutos, tipo, ordem, aula_id, titulo")
+            .select("materia_slug, data_agendada, duracao_minutos, tipo, ordem, aula_id, titulo, lista_questoes_id")
             .eq("plano_estudo_id", plano_id)
             .order("data_agendada")
             .order("ordem")

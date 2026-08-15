@@ -1,12 +1,20 @@
 from datetime import date, timedelta
 
-from services.plano_estudos.contexto import AulaContexto, PlanoEstudosContexto, ProvaContexto
+from services.plano_estudos.contexto import (
+    AulaContexto,
+    ListaContexto,
+    PlanoEstudosContexto,
+    ProvaContexto,
+)
 from services.plano_estudos.deterministic_generator import DeterministicPlanGenerator
 
 HOJE = date(2026, 1, 5)  # segunda-feira
 
 
-def _aula(id_, materia, titulo, duracao, ordem_topico=0, ordem_aula=0, mais_cobrado=False, dificuldade="medio"):
+def _aula(
+    id_, materia, titulo, duracao, ordem_topico=0, ordem_aula=0, mais_cobrado=False,
+    dificuldade="medio", topico_id=None,
+):
     return AulaContexto(
         id=id_,
         materia_slug=materia,
@@ -16,6 +24,7 @@ def _aula(id_, materia, titulo, duracao, ordem_topico=0, ordem_aula=0, mais_cobr
         ordem_aula=ordem_aula,
         mais_cobrado=mais_cobrado,
         dificuldade=dificuldade,
+        topico_id=topico_id,
     )
 
 
@@ -26,6 +35,9 @@ def _contexto(
     aulas_por_materia,
     tempo_por_dia_minutos=60,
     dias_estudo=None,
+    taxa_erro_por_materia=None,
+    taxa_erro_por_topico=None,
+    listas_por_materia=None,
 ):
     return PlanoEstudosContexto(
         data_inicio=HOJE,
@@ -35,6 +47,9 @@ def _contexto(
         aulas_por_materia=aulas_por_materia,
         tempo_por_dia_minutos=tempo_por_dia_minutos,
         dias_estudo=dias_estudo or ["monday", "tuesday", "wednesday", "thursday", "friday"],
+        taxa_erro_por_materia=taxa_erro_por_materia or {},
+        taxa_erro_por_topico=taxa_erro_por_topico or {},
+        listas_por_materia=listas_por_materia or {},
     )
 
 
@@ -397,3 +412,123 @@ def test_replanejamento_nao_reoferece_aula_ja_concluida_e_retoma_historico():
     assert "a1" not in todos_ids
     assert "a2" in todos_ids
     assert plano.periodo_inicio == HOJE + timedelta(days=1)
+
+
+def test_materia_com_mais_erro_sobe_na_prioridade_mesmo_com_prova_mais_distante():
+    gerador = DeterministicPlanGenerator()
+    provas_validas = [
+        (ProvaContexto("enem", "ENEM", HOJE + timedelta(days=30)), HOJE + timedelta(days=30)),
+        (ProvaContexto("fuvest", "Fuvest", HOJE + timedelta(days=25)), HOJE + timedelta(days=25)),
+    ]
+    contexto = _contexto(
+        provas=[p for p, _ in provas_validas],
+        materias_selecionadas=["matematica", "quimica"],
+        materias_por_prova={"enem": {"matematica"}, "fuvest": {"quimica"}},
+        aulas_por_materia={
+            "matematica": [_aula("a1", "matematica", "Aula mat", 30)],
+            "quimica": [_aula("a2", "quimica", "Aula quim", 30)],
+        },
+        # Sem taxa de erro, quimica venceria por ter a prova mais próxima
+        # (25 dias vs 30). Com erro alto em matemática, o boost deve
+        # inverter essa ordem.
+        taxa_erro_por_materia={"matematica": 1.0},
+    )
+
+    ordenadas = gerador._priorizar_materias(contexto, provas_validas, HOJE)
+
+    assert ordenadas[0] == "matematica"
+
+
+def test_materia_fraca_ganha_sessao_extra_de_revisao_quando_sobra_tempo():
+    aulas = [_aula("a1", "matematica", "Aula única", 20)]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=60,
+        taxa_erro_por_materia={"matematica": 0.8},
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    primeiro_dia = plano.dias[0]
+    tipos_no_dia = [s.tipo for s in primeiro_dia.sessoes]
+    assert tipos_no_dia.count("revisao") >= 1
+    assert len(primeiro_dia.sessoes) >= 2
+
+
+def test_materia_fraca_com_lista_disponivel_prefere_sessao_de_questoes_no_reforco():
+    aulas = [_aula("a1", "matematica", "Aula única", 20)]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=60,
+        taxa_erro_por_materia={"matematica": 0.8},
+        listas_por_materia={"matematica": ListaContexto(id="lista-1", materia_slug="matematica")},
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    sessoes_questoes = [
+        s for dia in plano.dias for s in dia.sessoes if s.tipo == "questoes"
+    ]
+    assert sessoes_questoes, "deveria ter gerado ao menos uma sessão de prática de questões"
+    assert sessoes_questoes[0].lista_questoes_id == "lista-1"
+
+
+def test_materia_sem_erro_nao_ganha_reforco_extra():
+    aulas = [_aula("a1", "matematica", "Aula única", 20)]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=60,
+        taxa_erro_por_materia={"matematica": 0.1},
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    assert len(plano.dias[0].sessoes) == 1
+
+
+def test_topico_fraco_e_priorizado_dentro_da_materia():
+    aulas = [
+        _aula("a1", "matematica", "Tópico forte", 20, ordem_topico=1, ordem_aula=1, topico_id="topico-forte"),
+        _aula("a2", "matematica", "Tópico fraco", 20, ordem_topico=2, ordem_aula=1, topico_id="topico-fraco"),
+    ]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=20,
+        taxa_erro_por_topico={"topico-fraco": 0.9},
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    primeira_sessao = plano.dias[0].sessoes[0]
+    assert primeira_sessao.aula_id == "a2"
+
+
+def test_sem_dados_de_erro_comportamento_e_identico_ao_anterior():
+    aulas = [
+        _aula("comum", "matematica", "Aula comum", 20, ordem_topico=1, ordem_aula=1, mais_cobrado=False),
+        _aula("cobrada", "matematica", "Aula mais cobrada", 20, ordem_topico=1, ordem_aula=2, mais_cobrado=True),
+    ]
+    contexto = _contexto(
+        provas=[ProvaContexto("enem", "ENEM", HOJE + timedelta(days=90))],
+        materias_selecionadas=["matematica"],
+        materias_por_prova={"enem": {"matematica"}},
+        aulas_por_materia={"matematica": aulas},
+        tempo_por_dia_minutos=20,
+    )
+
+    plano = DeterministicPlanGenerator().gerar(contexto)
+
+    primeira_sessao = plano.dias[0].sessoes[0]
+    assert primeira_sessao.aula_id == "cobrada"

@@ -220,17 +220,45 @@ def confirmaEmail(dados : ConfirmaEmail):
             {'ban_duration': 'none'}
         )
 
-        return {
+        resultado = {
             'sucesso' : True,
             'email' : email
         }
+
+        # Gera uma sessão real (sem precisar da senha do usuário) para o
+        # front não precisar chamar /auth/login logo em seguida: cria um
+        # magic link via Admin API e troca o OTP dele por uma sessão.
+        try:
+            link = supabase_admin.auth.admin.generate_link({
+                'type': 'magiclink',
+                'email': email
+            })
+            sessao = supabase.auth.verify_otp({
+                'email': email,
+                'token': link.properties.email_otp,
+                'type': 'magiclink'
+            })
+            if sessao.session:
+                resultado['session'] = {
+                    'access_token': sessao.session.access_token,
+                    'refresh_token': sessao.session.refresh_token,
+                    'token_type': 'bearer'
+                }
+        except Exception as erro_sessao:
+            # Confirmação já foi persistida acima — se a geração da sessão
+            # falhar, o front ainda pode cair para o fluxo antigo de login.
+            print(f"Erro ao gerar sessão pós-confirmação: {erro_sessao}")
+
+        return resultado
     except HTTPException:
         raise
 
     except Exception as erro:
-        erro_texto = str(erro).lower()
-        print(erro_texto)     #terminar de fazer o Exception
-    
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro interno ao confirmar e-mail: {str(erro)}"
+        )
+
 
 @router.post('/login')     #fazer bloqueio de usuário após 3 tentativas
 def login(dados : LoginUsuario):

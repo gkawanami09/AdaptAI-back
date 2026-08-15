@@ -97,6 +97,8 @@ class PlanoDoDiaItem(BaseModel):
     titulo: str
     duracao_min: int
     progresso: Optional[int] = None
+    tipo: Literal["aula", "questoes", "prova", "redacao", "revisao"]
+    conteudo_slug: Optional[str] = None
 
 
 class AlertaAlunoDashboard(BaseModel):

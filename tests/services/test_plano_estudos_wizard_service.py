@@ -82,6 +82,7 @@ def test_replanejar_apos_conclusao_nao_reoferece_aula_concluida():
     )
     fake.table("questoes").execute.return_value = query_result(data=[])
     fake.table("listas_questoes").execute.return_value = query_result(data=[])
+    fake.table("tentativas_questoes").execute.return_value = query_result(data=[])
     fake.table("topicos").execute.return_value = query_result(data=[])
     fake.table("aulas").execute.return_value = query_result(data=[
         {"id": "a1", "materia_id": "materia-1", "topico_id": None, "titulo": "Aula 1", "ordem": 1,
@@ -134,3 +135,68 @@ def test_replanejar_apos_conclusao_nao_reoferece_aula_concluida():
     assert "a1" in revisoes  # a aula concluída volta como revisão
     for anterior, atual in zip(revisoes, revisoes[1:]):
         assert anterior != atual  # não repete a mesma aula em dias consecutivos
+
+
+def test_desempenho_por_materia_ignora_taxa_de_erro_abaixo_do_minimo_de_tentativas():
+    service = PlanoEstudosWizardService()
+
+    with patch("services.plano_estudos_wizard_service.supabase_admin") as supabase_mock:
+        tabela = supabase_mock.table.return_value
+        tabela.select.return_value = tabela
+        tabela.eq.return_value = tabela
+        # só 2 tentativas na matéria-1 (abaixo do MIN_TENTATIVAS_CONFIAVEL=5)
+        tabela.execute.return_value = _query_result([
+            {"acertou": False, "questoes": {"materia_id": "materia-1", "topico_id": "topico-1"}},
+            {"acertou": False, "questoes": {"materia_id": "materia-1", "topico_id": "topico-1"}},
+        ])
+
+        taxa_erro_materia, taxa_erro_topico = service._desempenho_por_materia_e_topico(
+            "usuario-1", {"materia-1": "matematica"}
+        )
+
+        assert taxa_erro_materia == {}
+        assert taxa_erro_topico == {}
+
+
+def test_desempenho_por_materia_calcula_taxa_de_erro_com_tentativas_suficientes():
+    service = PlanoEstudosWizardService()
+
+    with patch("services.plano_estudos_wizard_service.supabase_admin") as supabase_mock:
+        tabela = supabase_mock.table.return_value
+        tabela.select.return_value = tabela
+        tabela.eq.return_value = tabela
+        tentativas = (
+            [{"acertou": False, "questoes": {"materia_id": "materia-1", "topico_id": "topico-1"}}] * 4
+            + [{"acertou": True, "questoes": {"materia_id": "materia-1", "topico_id": "topico-1"}}]
+        )
+        tabela.execute.return_value = _query_result(tentativas)
+
+        taxa_erro_materia, taxa_erro_topico = service._desempenho_por_materia_e_topico(
+            "usuario-1", {"materia-1": "matematica"}
+        )
+
+        assert taxa_erro_materia == {"matematica": 0.8}
+        assert taxa_erro_topico == {"topico-1": 0.8}
+
+
+def test_listas_por_materia_devolve_uma_lista_por_materia():
+    service = PlanoEstudosWizardService()
+
+    with patch("services.plano_estudos_wizard_service.supabase_admin") as supabase_mock:
+        tabela = supabase_mock.table.return_value
+        tabela.select.return_value = tabela
+        tabela.in_.return_value = tabela
+        tabela.execute.return_value = _query_result([
+            {"id": "lista-1", "materia_id": "materia-1"},
+            {"id": "lista-2", "materia_id": "materia-1"},  # ignorada — já tem lista-1
+            {"id": "lista-3", "materia_id": "materia-2"},
+        ])
+
+        materias_rows = [
+            {"id": "materia-1", "slug": "matematica"},
+            {"id": "materia-2", "slug": "fisica"},
+        ]
+        listas = service._listas_por_materia(materias_rows)
+
+        assert listas["matematica"].id == "lista-1"
+        assert listas["fisica"].id == "lista-3"

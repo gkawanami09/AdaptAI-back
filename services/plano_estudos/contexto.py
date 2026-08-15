@@ -19,6 +19,13 @@ class AulaContexto:
     ordem_aula: int
     mais_cobrado: bool = False
     dificuldade: str = "medio"
+    topico_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ListaContexto:
+    id: str
+    materia_slug: str
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,16 @@ class PlanoEstudosContexto:
     tempo_por_dia_minutos: int
     dias_estudo: list[str]
     duracao_maxima_semanas: int = 12
+    # Desempenho real do aluno em tentativas_questoes (0=nunca erra,
+    # 1=sempre erra), usado para priorizar matérias/tópicos onde ele mais
+    # erra. Vazio por padrão (ex.: aluno sem tentativas ainda, ou testes
+    # que não se importam com esse aspecto) — nesse caso o gerador se
+    # comporta exatamente como antes, sem nenhum boost por erro.
+    taxa_erro_por_materia: dict[str, float] = field(default_factory=dict)
+    taxa_erro_por_topico: dict[str, float] = field(default_factory=dict)
+    # Uma lista de questões candidata por matéria, para sessões extras de
+    # prática nas matérias em que o aluno mais erra.
+    listas_por_materia: dict[str, ListaContexto] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -46,6 +63,7 @@ class SessaoGerada:
     titulo: str
     duracao_minutos: int
     tipo: str
+    lista_questoes_id: str | None = None
 
 
 @dataclass(frozen=True)

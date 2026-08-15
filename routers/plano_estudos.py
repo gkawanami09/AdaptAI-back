@@ -307,17 +307,12 @@ def obter_plano_estudos(
                 "tem_tarefas": bool(tarefas_por_data.get(dia_atual.isoformat())),
             })
 
-        dia_selecionado = data_referencia
-        if periodo != "dia":
-            for indice in range(7):
-                dia_atual = semana_inicio + timedelta(days=indice)
-                if tarefas_por_data.get(dia_atual.isoformat()):
-                    dia_selecionado = dia_atual
-                    break
-
+        # tarefas_do_dia deve sempre refletir a `data` recebida, independente
+        # do `periodo` — este último só influencia visao_geral_semana,
+        # prioridades_da_semana e progresso.
         tarefas_do_dia_banco = (
             tarefas_periodo if periodo == "dia"
-            else tarefas_por_data.get(dia_selecionado.isoformat(), [])
+            else tarefas_por_data.get(data_referencia.isoformat(), [])
         )
 
         tarefas_do_dia = []
@@ -571,12 +566,15 @@ def concluir_tarefa(
             registrar_evento_gamificacao(
                 id_usuario, EventoGamificacao.AULA_CONCLUIDA, {"minutos": duracao}
             )
-            # Replaneja os dias futuros ainda não realizados do plano para
-            # considerar a aula recém-concluída (não repetir/re-oferecer,
-            # e permitir que a revisão gire por ela também). Tarefas
-            # passadas e já concluídas nunca são tocadas.
-            if dados_tarefa.get("plano_estudo_id"):
-                wizard_service.replanejar_apos_conclusao(dados_tarefa["plano_estudo_id"], id_usuario)
+
+        # Replaneja os dias futuros ainda não realizados do plano ao
+        # concluir uma aula OU uma sessão de questões — a segunda é o
+        # momento em que o desempenho do aluno (tentativas_questoes) muda
+        # de fato, então é quando o replanejamento consegue repriorizar
+        # matérias/tópicos com mais erro. Tarefas passadas e já concluídas
+        # nunca são tocadas.
+        if dados_tarefa["tipo_tarefa"] in ("aula", "questoes") and dados_tarefa.get("plano_estudo_id"):
+            wizard_service.replanejar_apos_conclusao(dados_tarefa["plano_estudo_id"], id_usuario)
 
         return {"sucesso": True}
 

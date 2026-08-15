@@ -12,6 +12,15 @@ router = APIRouter(
 
 DIAS_SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
+TIPO_TAREFA_PARA_TIPO_CONTRATO = {
+    "aula": "aula",
+    "questoes": "questoes",
+    "simulado": "prova",
+    "redacao": "redacao",
+    "revisao": "revisao",
+    "personalizada": "revisao",
+}
+
 
 @router.get('', response_model=AlunoDashboardResponse)
 def obter_dashboard(usuario_atual=Depends(pegar_usuario_atual)):
@@ -64,19 +73,63 @@ def obter_dashboard(usuario_atual=Depends(pegar_usuario_atual)):
         tempo_estudado_min = sum(atividade["minutos_estudo"] for atividade in atividades_semana)
         xp_semana = sum(atividade["xp_ganho"] for atividade in atividades_semana)
 
-        tarefas_semana = (
+        # resumo.tarefas_totais/tarefas_concluidas precisam refletir o mesmo
+        # conjunto de tarefas de "hoje" que popula plano_do_dia abaixo — a
+        # mesma data de referência e o mesmo usuario_id em ambas as queries,
+        # em vez de misturar um escopo semanal com um escopo diário.
+        tarefas_hoje = (
             supabase_admin
             .table("tarefas_estudo")
-            .select("id, status")
+            .select(
+                "id, titulo, tipo_tarefa, status, duracao_minutos, materia_id, "
+                "aula_id, lista_questoes_id, tema_redacao_id"
+            )
             .eq("usuario_id", id_usuario)
-            .gte("data_agendada", inicio_semana.isoformat())
-            .lte("data_agendada", fim_semana.isoformat())
+            .eq("data_agendada", hoje.isoformat())
+            .order("ordem")
             .execute()
             .data or []
         )
 
-        tarefas_totais = len(tarefas_semana)
-        tarefas_concluidas = sum(1 for tarefa in tarefas_semana if tarefa["status"] == "concluida")
+        # Slugs do conteúdo vinculado a cada tarefa de hoje, para o front
+        # montar o link de destino do botão "Começar" (/aulas/:slug,
+        # /questoes/:slug, /redacao/:slug) — mesma lógica de Plano de Estudos.
+        ids_aulas = list({t["aula_id"] for t in tarefas_hoje if t.get("aula_id")})
+        ids_listas = list({t["lista_questoes_id"] for t in tarefas_hoje if t.get("lista_questoes_id")})
+        ids_temas_redacao = list({t["tema_redacao_id"] for t in tarefas_hoje if t.get("tema_redacao_id")})
+
+        slug_por_aula_id = {
+            a["id"]: a["slug"]
+            for a in (
+                supabase_admin.table("aulas").select("id, slug").in_("id", ids_aulas).execute().data or []
+            )
+        } if ids_aulas else {}
+
+        slug_por_lista_id = {
+            l["id"]: l["slug"]
+            for l in (
+                supabase_admin.table("listas_questoes").select("id, slug").in_("id", ids_listas).execute().data or []
+            )
+        } if ids_listas else {}
+
+        slug_por_tema_redacao_id = {
+            t["id"]: t["slug"]
+            for t in (
+                supabase_admin.table("temas_redacao").select("id, slug").in_("id", ids_temas_redacao).execute().data or []
+            )
+        } if ids_temas_redacao else {}
+
+        def resolver_conteudo_slug(tarefa: dict) -> str | None:
+            if tarefa["tipo_tarefa"] == "aula":
+                return slug_por_aula_id.get(tarefa.get("aula_id"))
+            if tarefa["tipo_tarefa"] == "questoes":
+                return slug_por_lista_id.get(tarefa.get("lista_questoes_id"))
+            if tarefa["tipo_tarefa"] == "redacao":
+                return slug_por_tema_redacao_id.get(tarefa.get("tema_redacao_id"))
+            return None
+
+        tarefas_totais = len(tarefas_hoje)
+        tarefas_concluidas = sum(1 for tarefa in tarefas_hoje if tarefa["status"] == "concluida")
 
         evolucao_semanal = []
         for indice in range(7):
@@ -95,12 +148,13 @@ def obter_dashboard(usuario_atual=Depends(pegar_usuario_atual)):
         materias = (
             supabase_admin
             .table("materias")
-            .select("id, nome")
+            .select("id, nome, cor, icone")
             .eq("ativo", True)
             .order("ordem")
             .execute()
             .data or []
         )
+        materias_por_id = {materia["id"]: materia for materia in materias}
 
         tentativas = (
             supabase_admin
@@ -141,10 +195,27 @@ def obter_dashboard(usuario_atual=Depends(pegar_usuario_atual)):
                 "cor": cor,
             })
 
-        # TODO: plano_do_dia depende de mapear tarefas_estudo (aula_id/lista_questoes_id/
-        # modelo_simulado_id/tema_redacao_id) para ícone e cor de exibição; aguardando
-        # definição do design system de ícones por tipo de tarefa.
+        STATUS_TAREFA_PARA_STATUS_DASHBOARD = {
+            "concluida": "concluido",
+            "em_andamento": "em-andamento",
+            "pendente": "nao-iniciado",
+        }
+
         plano_do_dia = []
+        for tarefa in tarefas_hoje:
+            materia = materias_por_id.get(tarefa["materia_id"])
+            plano_do_dia.append({
+                "id": tarefa["id"],
+                "icone": materia["icone"] if materia else "📘",
+                "materia": materia["nome"] if materia else "Geral",
+                "materia_cor": materia["cor"] if materia else "gray",
+                "status": STATUS_TAREFA_PARA_STATUS_DASHBOARD.get(tarefa["status"], "nao-iniciado"),
+                "titulo": tarefa["titulo"],
+                "duracao_min": tarefa["duracao_minutos"] or 0,
+                "progresso": 100 if tarefa["status"] == "concluida" else (50 if tarefa["status"] == "em_andamento" else None),
+                "tipo": TIPO_TAREFA_PARA_TIPO_CONTRATO.get(tarefa["tipo_tarefa"], "revisao"),
+                "conteudo_slug": resolver_conteudo_slug(tarefa),
+            })
 
         alertas = []
         materias_abaixo_meta = [m for m in desempenho_por_materia if m["percentual"] < 50 and total_por_materia.get(m["materia_id"], 0) > 0]

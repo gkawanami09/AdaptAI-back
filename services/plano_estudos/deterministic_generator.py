@@ -4,6 +4,7 @@ from datetime import date
 from services.plano_estudos.contexto import (
     AulaContexto,
     DiaGerado,
+    ListaContexto,
     PlanoEstudosContexto,
     PlanoGerado,
     ProvaContexto,
@@ -22,15 +23,36 @@ LIMITE_DIAS_FASE_MISTA = 60
 LIMITE_DIAS_FASE_REVISAO = 30
 
 # Aulas mais cobradas no vestibular vão primeiro na fila de cada matéria;
-# dentro do mesmo nível de importância, as mais básicas vêm antes das
+# dentro do mesmo nível de importância, tópicos onde o aluno mais erra vêm
+# antes, e dentro do mesmo nível de erro as mais básicas vêm antes das
 # difíceis — empates remanescentes preservam a ordem curricular original
 # (ordem_topico, ordem_aula).
 DIFICULDADE_PESO = {"basico": 0, "medio": 1, "dificil": 2}
 
+# Abaixo desse número de tentativas em uma matéria/tópico, a taxa de erro
+# não é confiável o suficiente para influenciar o plano (1 ou 2 questões
+# erradas não deveriam reordenar tudo).
+MIN_TENTATIVAS_CONFIAVEL = 5
 
-def _prioridade_aula(aula: AulaContexto) -> tuple:
+# Taxa de erro (0-1) a partir da qual uma matéria/tópico é considerado
+# "fraco" o bastante para ganhar reforço extra (revisão/questões) ou furar
+# a fila de aulas da matéria.
+LIMIAR_MATERIA_FRACA = 0.4
+LIMIAR_TOPICO_FRACO = 0.4
+
+# Multiplica o score de prioridade da matéria por (1 + PESO_ERRO_MATERIA *
+# taxa_erro) — a proximidade da prova continua sendo o fator dominante,
+# mas matérias onde o aluno mais erra sobem dentro dessa ordem.
+PESO_ERRO_MATERIA = 0.6
+
+DURACAO_SESSAO_QUESTOES_MIN = 20
+
+
+def _prioridade_aula(aula: AulaContexto, taxa_erro_por_topico: dict[str, float]) -> tuple:
+    taxa_erro_topico = taxa_erro_por_topico.get(aula.topico_id, 0.0) if aula.topico_id else 0.0
     return (
         0 if aula.mais_cobrado else 1,
+        0 if taxa_erro_topico >= LIMIAR_TOPICO_FRACO else 1,
         DIFICULDADE_PESO.get(aula.dificuldade, 1),
         aula.ordem_topico,
         aula.ordem_aula,
@@ -109,7 +131,7 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             if not aulas:
                 avisos.append(f"Matéria '{materia}' não possui aulas cadastradas no banco.")
 
-            aptas.sort(key=_prioridade_aula)
+            aptas.sort(key=lambda a: _prioridade_aula(a, contexto.taxa_erro_por_topico))
             filas[materia] = deque(aptas)
 
         historico: dict[str, list[AulaContexto]] = {
@@ -124,7 +146,8 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
         for dia in dias_calendario(hoje, periodo_fim, contexto.dias_estudo):
             fase = _fase_do_dia(dia, provas_validas)
             sessoes = self._distribuir_dia(
-                fase, materias_ordenadas, filas, historico, indice_revisao, contexto.tempo_por_dia_minutos
+                fase, materias_ordenadas, filas, historico, indice_revisao, contexto.tempo_por_dia_minutos,
+                contexto.taxa_erro_por_materia, contexto.listas_por_materia,
             )
             if sessoes:
                 dias_gerados.append(DiaGerado(data=dia, sessoes=sessoes))
@@ -161,6 +184,12 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             if score == 0.0:
                 score = PESO_MATERIA_SEM_PROVA_RELACIONADA
 
+            # A proximidade da prova continua sendo o fator dominante — o
+            # erro só empurra a matéria pra cima dentro dessa ordem, nunca
+            # a faz ultrapassar uma matéria muito mais cobrada em breve.
+            taxa_erro = contexto.taxa_erro_por_materia.get(materia, 0.0)
+            score *= 1 + PESO_ERRO_MATERIA * taxa_erro
+
             scores[materia] = score
 
         return sorted(
@@ -176,14 +205,21 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
         historico: dict[str, list[AulaContexto]],
         indice_revisao: dict[str, int],
         tempo_por_dia_minutos: int,
+        taxa_erro_por_materia: dict[str, float] | None = None,
+        listas_por_materia: dict[str, ListaContexto] | None = None,
     ) -> list[SessaoGerada]:
         if not materias_ordenadas:
             return []
 
-        # No máximo 1 sessão por matéria por dia — sem isso, uma matéria com
-        # pouco conteúdo (ou nenhum novo) acaba reaproveitando a mesma aula
-        # como revisão em todas as voltas do round-robin do dia, repetindo-a
-        # várias vezes seguidas sem nenhum ganho pedagógico.
+        taxa_erro_por_materia = taxa_erro_por_materia or {}
+        listas_por_materia = listas_por_materia or {}
+
+        # No máximo 1 sessão por matéria por dia no round-robin principal —
+        # sem isso, uma matéria com pouco conteúdo (ou nenhum novo) acaba
+        # reaproveitando a mesma aula como revisão em todas as voltas do
+        # round-robin do dia, repetindo-a várias vezes seguidas sem nenhum
+        # ganho pedagógico. Matérias fracas (mais erro) ganham uma segunda
+        # sessão de reforço no passe extra abaixo, se sobrar tempo.
         sessoes: list[SessaoGerada] = []
         restante = tempo_por_dia_minutos
 
@@ -213,6 +249,56 @@ class DeterministicPlanGenerator(PlanoEstudosGenerator):
             if sessao is not None:
                 sessoes.append(sessao)
                 restante -= sessao.duracao_minutos
+
+        if restante > 0:
+            sessoes.extend(self._reforco_materias_fracas(
+                materias_ordenadas, historico, indice_revisao, taxa_erro_por_materia,
+                listas_por_materia, restante,
+            ))
+
+        return sessoes
+
+    def _reforco_materias_fracas(
+        self,
+        materias_ordenadas: list[str],
+        historico: dict[str, list[AulaContexto]],
+        indice_revisao: dict[str, int],
+        taxa_erro_por_materia: dict[str, float],
+        listas_por_materia: dict[str, ListaContexto],
+        restante: int,
+    ) -> list[SessaoGerada]:
+        """Reforço extra (fora do round-robin normal) para matérias em que o
+        aluno mais erra: uma sessão de prática de questões (se houver lista
+        cadastrada para a matéria) ou, na falta dela, uma revisão de aula já
+        vista — nunca conteúdo novo, o objetivo aqui é consolidar o que já
+        está com erro alto, não avançar o currículo.
+        """
+        sessoes: list[SessaoGerada] = []
+
+        for materia in materias_ordenadas:
+            if restante <= 0:
+                break
+
+            if taxa_erro_por_materia.get(materia, 0.0) < LIMIAR_MATERIA_FRACA:
+                continue
+
+            lista = listas_por_materia.get(materia)
+            if lista is not None and DURACAO_SESSAO_QUESTOES_MIN <= restante:
+                sessoes.append(SessaoGerada(
+                    materia=materia,
+                    aula_id=None,
+                    titulo="Prática de questões — reforço",
+                    duracao_minutos=DURACAO_SESSAO_QUESTOES_MIN,
+                    tipo="questoes",
+                    lista_questoes_id=lista.id,
+                ))
+                restante -= DURACAO_SESSAO_QUESTOES_MIN
+                continue
+
+            sessao_revisao = self._sessao_revisao(materia, historico, indice_revisao, restante)
+            if sessao_revisao is not None:
+                sessoes.append(sessao_revisao)
+                restante -= sessao_revisao.duracao_minutos
 
         return sessoes
 
