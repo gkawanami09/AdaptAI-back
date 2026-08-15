@@ -10,11 +10,14 @@ from schemas.aula_visualizacao_schema import (
     AtualizarConceitoAulaResponse,
 )
 from services.gamificacao import EventoGamificacao, conceder_xp_e_atividade, registrar_evento_gamificacao
+from services.plano_estudos_wizard_service import PlanoEstudosWizardService
 
 router = APIRouter(
     prefix='/aluno/aulas',
     tags=['Aluno - Visualização de Aula']
 )
+
+wizard_service = PlanoEstudosWizardService()
 
 DIFICULDADE_LABEL = {
     "basico": "Básico",
@@ -268,6 +271,36 @@ def concluir_aula(
             duracao = sum(c["duracao"] for c in duracao_conteudos)
             conceder_xp_e_atividade(id_usuario, 10, minutos_estudo=duracao, agora=agora, aulas_concluidas=1)
             registrar_evento_gamificacao(id_usuario, EventoGamificacao.AULA_CONCLUIDA)
+
+            # Marca a tarefa do plano de estudos correspondente a essa aula
+            # como concluída — é a mesma linha que aparece em
+            # /aluno/dashboard (plano_do_dia) e é contabilizada em
+            # resumo.tarefas_totais/tarefas_concluidas, então concluir a
+            # aula por aqui (fora da tela do plano) também precisa refletir
+            # lá. Só considera a tarefa de hoje (mesma referência de data
+            # usada em routers/dashboard.py: UTC) — tarefas futuras da
+            # mesma aula (ex.: revisão reagendada) não são tocadas.
+            tarefa_hoje = (
+                supabase_admin.table("tarefas_estudo")
+                .select("id, plano_estudo_id")
+                .eq("usuario_id", id_usuario)
+                .eq("aula_id", aula["id"])
+                .eq("data_agendada", agora.date().isoformat())
+                .in_("status", ["pendente", "em_andamento"])
+                .limit(1)
+                .execute()
+            )
+
+            if tarefa_hoje.data:
+                tarefa = tarefa_hoje.data[0]
+                supabase_admin.table("tarefas_estudo").update({
+                    "status": "concluida",
+                    "concluido_em": agora.isoformat(),
+                    "atualizado_em": agora.isoformat(),
+                }).eq("id", tarefa["id"]).execute()
+
+                if tarefa.get("plano_estudo_id"):
+                    wizard_service.replanejar_apos_conclusao(tarefa["plano_estudo_id"], id_usuario)
 
         return montar_resposta_aula(aula, id_usuario)
 
