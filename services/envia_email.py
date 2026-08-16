@@ -102,3 +102,100 @@ Se você não tentou criar uma conta, ignore este email.
         servidor.login(smtp_usuario, smtp_senha)
         servidor.send_message(mensagem)
         print('email enviado!')
+
+
+def enviar_email_recuperacao_senha(destinatario: str, link: str, nome: str, minutos_expiracao: int):
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_usuario = os.getenv("SMTP_USER")
+    smtp_senha = os.getenv("SMTP_PASSWORD")
+    smtp_from = os.getenv("SMTP_FROM", smtp_usuario)
+
+    mensagem = EmailMessage()
+    mensagem["Subject"] = "Recuperação de senha do AdaptAI"
+    mensagem["From"] = smtp_from
+    mensagem["To"] = destinatario
+
+    mensagem.set_content(
+        f"""
+Olá, {nome}!
+
+Recebemos uma solicitação para redefinir a senha da sua conta no AdaptAI.
+
+Para criar uma nova senha, acesse o link abaixo:
+
+{link}
+
+Esse link expira em {minutos_expiracao} minutos.
+
+Se você não solicitou essa alteração, ignore este email — sua senha atual continua válida.
+"""
+    )
+
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <body style="margin:0; padding:0; background-color:#f4f7fb; font-family:Arial, sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f7fb; padding:40px 0;">
+            <tr>
+                <td align="center">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.08);">
+
+                        <tr>
+                            <td style="background:linear-gradient(135deg, #4f46e5, #7c3aed); padding:28px; text-align:center;">
+                                <h1 style="margin:0; color:#ffffff; font-size:28px;">
+                                    AdaptAI
+                                </h1>
+                                <p style="margin:8px 0 0; color:#e0e7ff; font-size:15px;">
+                                    Recuperação de senha
+                                </p>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:32px;">
+                                <h2 style="margin:0 0 16px; color:#111827; font-size:22px;">
+                                    Redefina sua senha
+                                </h2>
+
+                                <p style="margin:0 0 20px; color:#4b5563; font-size:16px; line-height:1.5;">
+                                    Olá, <span style="color:#4338ca">{nome}</span>! Recebemos uma solicitação para redefinir a senha da sua conta. Clique no botão abaixo para criar uma nova senha.
+                                </p>
+
+                                <div style="text-align:center; margin:28px 0;">
+                                    <a href="{link}" style="display:inline-block; background:#4338ca; color:#ffffff; text-decoration:none; font-weight:bold; padding:14px 28px; border-radius:10px; font-size:15px;">
+                                        Redefinir minha senha
+                                    </a>
+                                </div>
+
+                                <p style="margin:0 0 16px; color:#6b7280; font-size:14px; line-height:1.5;">
+                                    Esse link expira em <strong>{minutos_expiracao} minutos</strong>.
+                                </p>
+
+                                <p style="margin:0; color:#9ca3af; font-size:13px; line-height:1.5;">
+                                    Se você não solicitou essa alteração, pode ignorar este email com segurança — sua senha atual continua válida.
+                                </p>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td style="background:#f9fafb; padding:18px; text-align:center; color:#9ca3af; font-size:12px;">
+                                © AdaptAI — Plataforma de estudos com inteligência artificial
+                            </td>
+                        </tr>
+
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    mensagem.add_alternative(html, subtype="html")
+
+    with smtplib.SMTP(smtp_host, smtp_port) as servidor:
+        servidor.starttls()
+        servidor.login(smtp_usuario, smtp_senha)
+        servidor.send_message(mensagem)
+        print('email de recuperação enviado!')

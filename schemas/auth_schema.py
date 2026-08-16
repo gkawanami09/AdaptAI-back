@@ -7,3 +7,10 @@ class LoginUsuario(BaseModel):
 class ConfirmaEmail(BaseModel):
     email: str
     codigo: str
+
+class EsqueciSenhaPayload(BaseModel):
+    email: str
+
+class RedefinirSenhaPayload(BaseModel):
+    token: str
+    nova_senha: str

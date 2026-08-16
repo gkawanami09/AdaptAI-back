@@ -5,7 +5,8 @@ from database import supabase, supabase_admin
 from utils.validacao import validar_senha_forte
 from utils.codigo_email import gerar_codigo_email, gerar_hash_codigo, codigo_expiracao_minutos
 from services.envia_email import enviar_email_verificacao
-from schemas.auth_schema import LoginUsuario, ConfirmaEmail
+from schemas.auth_schema import LoginUsuario, ConfirmaEmail, EsqueciSenhaPayload, RedefinirSenhaPayload
+from services import recuperacao_senha_service
 
 
 router = APIRouter(
@@ -344,4 +345,45 @@ def login(dados : LoginUsuario):
         raise HTTPException(
             status_code=500,
             detail=f"Erro interno ao fazer login: {str(erro)}"
+        )
+
+
+_MENSAGEM_ESQUECI_SENHA = "Se este email estiver cadastrado, enviaremos instruções para redefinir sua senha."
+
+
+@router.post('/esqueci-senha')
+def esqueci_senha(dados: EsqueciSenhaPayload):
+    # Resposta idêntica exista ou não o email, para não permitir enumeração
+    # de usuários. Qualquer falha inesperada também não deve vazar detalhe.
+    try:
+        recuperacao_senha_service.solicitar_recuperacao(dados.email)
+    except Exception as erro:
+        print(f"Erro ao processar solicitação de recuperação de senha: {erro}")
+
+    return {"mensagem": _MENSAGEM_ESQUECI_SENHA}
+
+
+@router.post('/redefinir-senha')
+def redefinir_senha(dados: RedefinirSenhaPayload):
+    senha_valida, mensagem_senha = validar_senha_forte(dados.nova_senha)
+    if not senha_valida:
+        raise HTTPException(status_code=400, detail=mensagem_senha)
+
+    try:
+        recuperacao_senha_service.redefinir_senha(dados.token, dados.nova_senha)
+        return {"sucesso": True}
+
+    except recuperacao_senha_service.TokenExpiradoError:
+        raise HTTPException(status_code=410, detail="Link de recuperação expirado. Solicite um novo.")
+
+    except recuperacao_senha_service.TokenInvalidoError:
+        raise HTTPException(status_code=401, detail="Link de recuperação inválido ou já utilizado.")
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro interno ao redefinir senha: {str(erro)}"
         )

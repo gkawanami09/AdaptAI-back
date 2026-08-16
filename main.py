@@ -3,7 +3,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS
-from routers import auth, usuarios, materias, questoes, onboarding, dashboard, plano_estudos, biblioteca_aulas, aula_visualizacao, banco_questoes, visualizacao_questoes, simulados, progresso, conquistas, configuracoes_aluno, redacao, chat
+from routers import auth, usuarios, materias, questoes, onboarding, dashboard, plano_estudos, biblioteca_aulas, aula_visualizacao, banco_questoes, visualizacao_questoes, simulados, progresso, conquistas, configuracoes_aluno, conta_aluno, redacao, chat
 from routers.admin import materias as admin_materias
 from routers.admin import topicos as admin_topicos
 from routers.admin import aulas as admin_aulas
@@ -72,6 +72,7 @@ app.include_router(simulados.router)
 app.include_router(progresso.router)
 app.include_router(conquistas.router)
 app.include_router(configuracoes_aluno.router)
+app.include_router(conta_aluno.router)
 app.include_router(redacao.router)
 app.include_router(chat.router)
 # app.include_router(materias.router)

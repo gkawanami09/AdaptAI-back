@@ -28,6 +28,8 @@ CORS_ORIGINS = _comma_separated_env(
 # mecanismo de inferência (ollama | openai_compatible) — o modelo em si
 # (Qwen, Gemma, Llama, GPT...) é definido apenas por AI_MODEL, sem
 # precisar trocar de provider.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.adaptai.com").rstrip("/")
+
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:11434")
 AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:14b")

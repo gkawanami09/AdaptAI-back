@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import os
 import random
+import secrets
 from datetime import datetime, timedelta, timezone
 
 
@@ -21,3 +22,9 @@ def gerar_hash_codigo(codigo: str) -> str:
 
 def codigo_expiracao_minutos(minutos: int = 10):
     return datetime.now(timezone.utc) + timedelta(minutes=minutos)
+
+
+def gerar_token_seguro() -> str:
+    # Token opaco de alta entropia para links de recuperação de senha
+    # (não é um código digitável, então usa mais bits que gerar_codigo_email).
+    return secrets.token_urlsafe(32)

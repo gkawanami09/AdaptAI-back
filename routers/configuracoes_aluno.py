@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Depends
-from database import supabase_admin
+from database import supabase, supabase_admin
 from utils.autenticacao import pegar_usuario_atual
+from utils.validacao import validar_senha_forte
+from services import dados_ia_service
 from schemas.configuracoes_aluno_schema import (
     ConfiguracoesAlunoResponse,
     PatchNotificacaoAlunoPayload,
@@ -9,6 +11,13 @@ from schemas.configuracoes_aluno_schema import (
     ConfiguracoesAlunoMetas,
     PatchAparenciaAlunoPayload,
     PatchAparenciaAlunoResponse,
+    PatchPerfilAlunoPayload,
+    ConfiguracoesAlunoPerfil,
+    AlterarSenhaAlunoPayload,
+    AlterarSenhaAlunoResponse,
+    DadosIAResponse,
+    PatchDadosIAPayload,
+    PatchDadosIAResponse,
 )
 
 router = APIRouter(
@@ -20,31 +29,25 @@ NOTIFICACOES_CATALOGO = [
     {
         "id": "lembrete-diario",
         "label": "Lembrete diário de estudos",
-        "description": "Receba um lembrete no horário que você definir",
+        "description": "Receba um lembrete todo dia",
         "coluna": "lembrete_estudo_ativo",
     },
     {
         "id": "alerta-ofensiva",
         "label": "Alerta de ofensiva",
-        "description": "Aviso quando sua ofensiva estiver em risco",
+        "description": "Avise quando eu estiver perto de perder a ofensiva",
         "coluna": "alerta_ofensiva_ativo",
     },
     {
-        "id": "conquistas",
-        "label": "Conquistas desbloqueadas",
-        "description": "Aviso ao desbloquear uma nova conquista",
+        "id": "novas-conquistas",
+        "label": "Novas conquistas",
+        "description": "Avise quando eu desbloquear uma conquista",
         "coluna": "notificacao_conquistas_ativa",
     },
     {
-        "id": "relatorio-semanal",
-        "label": "Relatório semanal",
-        "description": "Resumo do seu desempenho a cada semana",
-        "coluna": "relatorio_semanal_ativo",
-    },
-    {
-        "id": "novidades-adaptai",
-        "label": "Novidades da AdaptAI",
-        "description": "Fique por dentro de novos recursos da plataforma",
+        "id": "novidades",
+        "label": "Novidades do AdaptAI",
+        "description": "Novidades e atualizações da plataforma",
         "coluna": "novidades_adaptai_ativo",
     },
 ]
@@ -208,7 +211,6 @@ def obter_configuracoes(usuario_atual=Depends(pegar_usuario_atual)):
         return {
             "perfil": montar_perfil(usuario_atual, id_usuario),
             "notificacoes": montar_notificacoes(configuracoes),
-            "metas": montar_metas(id_usuario),
             "aparencia": montar_aparencia(configuracoes),
         }
 
@@ -351,4 +353,150 @@ def atualizar_aparencia(
         raise HTTPException(
             status_code=500,
             detail="Erro ao atualizar aparência do aluno"
+        )
+
+
+@router.patch('/perfil', response_model=ConfiguracoesAlunoPerfil)
+def atualizar_perfil(
+    dados: PatchPerfilAlunoPayload,
+    usuario_atual=Depends(pegar_usuario_atual)
+):
+    try:
+        id_usuario = str(usuario_atual.id)
+        nome = dados.nome.strip()
+
+        if not nome:
+            raise HTTPException(status_code=400, detail="Nome não pode ser vazio")
+
+        ano_enem = (dados.ano_enem or "").strip()
+        if ano_enem and not ano_enem.isdigit():
+            raise HTTPException(status_code=400, detail="Ano do ENEM inválido")
+
+        supabase_admin.table("perfis").update({
+            "nome": nome,
+            "escola_nome": (dados.escola or "").strip() or None,
+        }).eq("id", id_usuario).execute()
+
+        if ano_enem:
+            existente = (
+                supabase_admin.table("preferencias_aluno")
+                .select("usuario_id")
+                .eq("usuario_id", id_usuario)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+            if existente:
+                supabase_admin.table("preferencias_aluno").update({
+                    "ano_alvo": int(ano_enem),
+                }).eq("usuario_id", id_usuario).execute()
+            else:
+                supabase_admin.table("preferencias_aluno").insert({
+                    "usuario_id": id_usuario,
+                    "ano_alvo": int(ano_enem),
+                }).execute()
+
+        return montar_perfil(usuario_atual, id_usuario)
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao atualizar perfil do aluno: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao atualizar perfil do aluno"
+        )
+
+
+@router.post('/senha', response_model=AlterarSenhaAlunoResponse)
+def alterar_senha(
+    dados: AlterarSenhaAlunoPayload,
+    usuario_atual=Depends(pegar_usuario_atual)
+):
+    try:
+        senha_valida, mensagem_senha = validar_senha_forte(dados.nova_senha)
+        if not senha_valida:
+            raise HTTPException(status_code=400, detail=mensagem_senha)
+
+        email = usuario_atual.email
+        if not email:
+            raise HTTPException(status_code=400, detail="Usuário sem email associado")
+
+        try:
+            supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": dados.senha_atual,
+            })
+        except Exception:
+            raise HTTPException(status_code=403, detail="Senha atual incorreta")
+
+        supabase_admin.auth.admin.update_user_by_id(
+            str(usuario_atual.id),
+            {"password": dados.nova_senha},
+        )
+
+        # Troca de senha invalida sessões antigas emitidas antes dela.
+        try:
+            supabase_admin.auth.admin.sign_out(str(usuario_atual.id), scope="others")
+        except Exception as erro_sessao:
+            print(f"Erro ao invalidar sessões antigas após troca de senha: {erro_sessao}")
+
+        return {"sucesso": True}
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao alterar senha do aluno: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao alterar senha do aluno"
+        )
+
+
+@router.get('/dados-ia', response_model=DadosIAResponse)
+def obter_dados_ia(usuario_atual=Depends(pegar_usuario_atual)):
+    try:
+        id_usuario = str(usuario_atual.id)
+        return dados_ia_service.montar_dados_ia(id_usuario)
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao obter dados de IA do aluno: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao obter dados de IA do aluno"
+        )
+
+
+@router.patch('/dados-ia', response_model=PatchDadosIAResponse)
+def atualizar_dados_ia(
+    dados: PatchDadosIAPayload,
+    usuario_atual=Depends(pegar_usuario_atual)
+):
+    try:
+        if dados.id not in dados_ia_service.IDS_VALIDOS:
+            raise HTTPException(status_code=404, detail="Categoria de dados não encontrada")
+
+        id_usuario = str(usuario_atual.id)
+        dados_ia_service.atualizar_preferencia(id_usuario, dados.id, dados.utilizado)
+
+        return {"id": dados.id, "utilizado": dados.utilizado}
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao atualizar preferência de dados de IA do aluno: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao atualizar preferência de dados de IA do aluno"
         )
