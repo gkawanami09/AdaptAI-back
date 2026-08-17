@@ -21,7 +21,7 @@ class FakeSupabase:
     def table(self, nome: str) -> MagicMock:
         if nome not in self._tabelas:
             mock = MagicMock(name=f"tabela_{nome}")
-            for metodo in ("select", "eq", "neq", "in_", "order", "limit", "insert", "update", "delete"):
+            for metodo in ("select", "eq", "neq", "in_", "gte", "lte", "order", "limit", "insert", "update", "delete"):
                 getattr(mock, metodo).return_value = mock
             self._tabelas[nome] = mock
         return self._tabelas[nome]

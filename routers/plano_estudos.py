@@ -3,6 +3,7 @@ from database import supabase_admin
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 from utils.autenticacao import pegar_usuario_atual
+from utils.data_brasil import hoje_brasil
 from schemas.plano_estudos_schema import (
     PlanoEstudosResponse,
     ReorganizarIAResponse,
@@ -443,7 +444,7 @@ def obter_plano_estudos(
 def reorganizar_plano_ia(usuario_atual=Depends(pegar_usuario_atual)):
     try:
         id_usuario = str(usuario_atual.id)
-        hoje = datetime.now(timezone.utc).date()
+        hoje = hoje_brasil()
 
         plano_ativo = (
             supabase_admin

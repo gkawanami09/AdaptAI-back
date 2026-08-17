@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from database import supabase_admin
 from datetime import datetime, timezone
 from utils.autenticacao import pegar_usuario_atual
+from utils.data_brasil import hoje_brasil
 from schemas.aula_visualizacao_schema import (
     AulaVisualizacaoResponse,
     AtualizarProgressoAula,
@@ -277,15 +278,19 @@ def concluir_aula(
             # /aluno/dashboard (plano_do_dia) e é contabilizada em
             # resumo.tarefas_totais/tarefas_concluidas, então concluir a
             # aula por aqui (fora da tela do plano) também precisa refletir
-            # lá. Só considera a tarefa de hoje (mesma referência de data
-            # usada em routers/dashboard.py: UTC) — tarefas futuras da
-            # mesma aula (ex.: revisão reagendada) não são tocadas.
+            # lá. Só considera a tarefa de hoje, usando hoje_brasil() (não
+            # a data UTC de `agora`) — o plano é gerado/replanejado com
+            # base no dia calendário do Brasil, então à noite (a partir de
+            # ~21h em horário de Brasília) a data UTC já seria a de amanhã
+            # e nunca bateria com a tarefa agendada para hoje. Tarefas
+            # futuras da mesma aula (ex.: revisão reagendada) não são
+            # tocadas.
             tarefa_hoje = (
                 supabase_admin.table("tarefas_estudo")
                 .select("id, plano_estudo_id")
                 .eq("usuario_id", id_usuario)
                 .eq("aula_id", aula["id"])
-                .eq("data_agendada", agora.date().isoformat())
+                .eq("data_agendada", hoje_brasil().isoformat())
                 .in_("status", ["pendente", "em_andamento"])
                 .limit(1)
                 .execute()

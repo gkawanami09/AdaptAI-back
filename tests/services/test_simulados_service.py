@@ -1,4 +1,9 @@
-from services.simulados_service import selecionar_questoes, calcular_resultado, calcular_resultado_por_area
+from services.simulados_service import (
+    selecionar_questoes,
+    selecionar_questoes_evitando,
+    calcular_resultado,
+    calcular_resultado_por_area,
+)
 
 
 def test_selecionar_questoes_sem_repeticao():
@@ -15,6 +20,35 @@ def test_selecionar_questoes_pool_menor_que_quantidade_devolve_pool_inteiro():
     selecionadas = selecionar_questoes(pool, 10)
 
     assert sorted(selecionadas) == sorted(pool)
+
+
+def test_selecionar_questoes_evitando_prefere_pool_sem_repeticao():
+    pool = [f"q{i}" for i in range(10)]
+    evitar = {"q0", "q1", "q2"}
+
+    selecionadas = selecionar_questoes_evitando(pool, 5, evitar)
+
+    assert len(selecionadas) == 5
+    assert not (set(selecionadas) & evitar)
+
+
+def test_selecionar_questoes_evitando_repete_se_nao_tiver_banco_suficiente():
+    pool = ["q1", "q2", "q3"]
+    evitar = {"q1", "q2"}  # só "q3" sobra sem repetir
+
+    selecionadas = selecionar_questoes_evitando(pool, 3, evitar)
+
+    assert len(selecionadas) == 3
+    assert sorted(selecionadas) == sorted(pool)  # precisou repetir q1/q2
+
+
+def test_selecionar_questoes_evitando_sem_evitar_funciona_como_selecionar_questoes():
+    pool = [f"q{i}" for i in range(20)]
+
+    selecionadas = selecionar_questoes_evitando(pool, 5, None)
+
+    assert len(selecionadas) == 5
+    assert len(set(selecionadas)) == 5
 
 
 def test_calcular_resultado_zero_por_cento():

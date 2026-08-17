@@ -63,11 +63,20 @@ def buscar_itens_lista(lista_id: str):
 
 
 def obter_progresso(usuario_id: str, lista_id: str):
+    """Devolve a execução mais recente do aluno nessa lista (ou None se
+    ele nunca começou). `progresso_lista_questoes_aluno` não tem
+    constraint de unicidade em (usuario_id, lista_questoes_id) — de
+    propósito: cada "refazer" (POST /aluno/banco-questoes/listas/{id}/refazer)
+    insere uma linha nova em vez de reaproveitar a existente, pra manter o
+    histórico de execuções anteriores intacto. `iniciado_em` mais recente
+    é sempre a execução "atual".
+    """
     resposta = (
         supabase_admin.table("progresso_lista_questoes_aluno")
-        .select("id, status")
+        .select("id, status, iniciado_em")
         .eq("usuario_id", usuario_id)
         .eq("lista_questoes_id", lista_id)
+        .order("iniciado_em", desc=True)
         .limit(1)
         .execute()
     )
@@ -75,6 +84,11 @@ def obter_progresso(usuario_id: str, lista_id: str):
 
 
 def garantir_progresso(usuario_id: str, lista_id: str):
+    """Devolve a execução atual, criando a primeira caso o aluno nunca
+    tenha começado essa lista. Não cria uma execução nova se a mais
+    recente já estiver finalizada — isso só acontece via /refazer,
+    explicitamente.
+    """
     progresso = obter_progresso(usuario_id, lista_id)
 
     if progresso:
@@ -92,19 +106,25 @@ def garantir_progresso(usuario_id: str, lista_id: str):
     return nova.data[0]
 
 
-def calcular_progresso(usuario_id: str, lista_id: str, ids_questoes: list[str]):
+def calcular_progresso(usuario_id: str, lista_id: str, ids_questoes: list[str], desde: str | None = None):
+    """`desde` (iniciado_em da execução atual) escopa a contagem só às
+    respostas dadas nesta execução — sem isso, um "refazer" não zeraria o
+    progresso mostrado na tela, já que respostas de execuções anteriores
+    continuam no banco (histórico preservado de propósito)."""
     total = len(ids_questoes)
 
-    respostas = (
+    consulta = (
         supabase_admin.table("respostas_lista_questoes_aluno")
         .select("questao_id")
         .eq("usuario_id", usuario_id)
         .eq("lista_questoes_id", lista_id)
-        .execute()
-        .data or []
-    ) if ids_questoes else []
+    )
+    if desde:
+        consulta = consulta.gte("respondido_em", desde)
 
-    concluidas = len(respostas)
+    respostas = consulta.execute().data or [] if ids_questoes else []
+
+    concluidas = len({r["questao_id"] for r in respostas})
     percentual = round((concluidas / total) * 100) if total > 0 else 0
 
     return concluidas, percentual
@@ -169,14 +189,18 @@ def obter_lista_questoes(slug: str, usuario_atual=Depends(pegar_usuario_atual)):
         for alt in alternativas:
             alternativas_por_questao.setdefault(alt["questao_id"], []).append(alt)
 
-        respostas = (
+        progresso = obter_progresso(id_usuario, lista["id"])
+        desde = progresso["iniciado_em"] if progresso else None
+
+        consulta_respostas = (
             supabase_admin.table("respostas_lista_questoes_aluno")
             .select("questao_id, alternativa_selecionada_id, correta")
             .eq("usuario_id", id_usuario)
             .eq("lista_questoes_id", lista["id"])
-            .execute()
-            .data or []
-        ) if ids_questoes else []
+        )
+        if desde:
+            consulta_respostas = consulta_respostas.gte("respondido_em", desde)
+        respostas = consulta_respostas.execute().data or [] if ids_questoes else []
         respostas_por_questao = {r["questao_id"]: r for r in respostas}
 
         favoritas = (
@@ -249,9 +273,8 @@ def obter_lista_questoes(slug: str, usuario_atual=Depends(pegar_usuario_atual)):
                 "favorita": questao["id"] in ids_favoritas,
             })
 
-        progresso = obter_progresso(id_usuario, lista["id"])
         status = progresso["status"] if progresso else "em_andamento"
-        concluidas, percentual = calcular_progresso(id_usuario, lista["id"], ids_questoes)
+        concluidas, percentual = calcular_progresso(id_usuario, lista["id"], ids_questoes, desde=desde)
 
         return {
             "slug": lista["slug"],
@@ -301,8 +324,8 @@ def responder_questao(
         if not item.data:
             raise HTTPException(status_code=404, detail="Questão não encontrada nessa lista")
 
-        progresso = obter_progresso(id_usuario, lista["id"])
-        if progresso and progresso["status"] == "finalizada":
+        progresso = garantir_progresso(id_usuario, lista["id"])
+        if progresso["status"] == "finalizada":
             raise HTTPException(status_code=422, detail="Lista já finalizada")
 
         questao = (
@@ -331,12 +354,19 @@ def responder_questao(
         alternativa_escolhida = alternativas[dados.opcao_selecionada]
         correta = alternativa_escolhida["id"] == questao.data[0]["alternativa_correta"]
 
+        # Escopado à execução atual (respondido_em >= iniciado_em da
+        # execução) — assim, responder de novo dentro da mesma execução
+        # só corrige a resposta (update), mas depois de um "refazer" (que
+        # inicia uma execução com iniciado_em mais recente) essa consulta
+        # não encontra nada e insere uma resposta nova, preservando a
+        # resposta da execução anterior como histórico.
         existente = (
             supabase_admin.table("respostas_lista_questoes_aluno")
             .select("id")
             .eq("usuario_id", id_usuario)
             .eq("lista_questoes_id", lista["id"])
             .eq("questao_id", str(questao_id))
+            .gte("respondido_em", progresso["iniciado_em"])
             .limit(1)
             .execute()
         )
@@ -358,8 +388,6 @@ def responder_questao(
                 "correta": correta,
             }).execute()
 
-        garantir_progresso(id_usuario, lista["id"])
-
         materia_id = questao.data[0]["materia_id"]
         registrar_evento_gamificacao(id_usuario, EventoGamificacao.QUESTAO_RESPONDIDA)
         if correta:
@@ -371,7 +399,9 @@ def responder_questao(
 
         itens = buscar_itens_lista(lista["id"])
         ids_questoes = [i["questao_id"] for i in itens]
-        concluidas, percentual = calcular_progresso(id_usuario, lista["id"], ids_questoes)
+        concluidas, percentual = calcular_progresso(
+            id_usuario, lista["id"], ids_questoes, desde=progresso["iniciado_em"]
+        )
 
         return {
             "id": str(questao_id),
@@ -456,9 +486,10 @@ def finalizar_lista(slug: str, usuario_atual=Depends(pegar_usuario_atual)):
 
         itens = buscar_itens_lista(lista["id"])
         ids_questoes = [item["questao_id"] for item in itens]
-        concluidas, percentual = calcular_progresso(id_usuario, lista["id"], ids_questoes)
-
         progresso = garantir_progresso(id_usuario, lista["id"])
+        concluidas, percentual = calcular_progresso(
+            id_usuario, lista["id"], ids_questoes, desde=progresso["iniciado_em"]
+        )
 
         if progresso["status"] == "finalizada":
             return {

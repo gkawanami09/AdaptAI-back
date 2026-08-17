@@ -47,3 +47,42 @@ CREATE TABLE IF NOT EXISTS public.preferencias_dados_ia (
   atualizado_em timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT preferencias_dados_ia_pkey PRIMARY KEY (usuario_id, categoria_id)
 );
+
+-- =====================================================================
+-- 3) Lock otimista para o replanejamento automático do plano de estudos,
+--    evitando corrida entre chamadas concorrentes de replanejar_apos_conclusao().
+--    (era migrations/plano_estudos_lock_replanejamento.sql)
+-- =====================================================================
+
+ALTER TABLE public.planos_estudo
+  ADD COLUMN IF NOT EXISTS replanejamento_em_andamento boolean NOT NULL DEFAULT false;
+
+-- =====================================================================
+-- 4) Novo contrato de simulados: tentativas com tempo limite, sorteio de
+--    questões por área e resultado/revisão persistidos.
+--    (era migrations/simulados_tentativas.sql)
+-- =====================================================================
+
+ALTER TABLE public.sessoes_simulado
+  ADD COLUMN IF NOT EXISTS tempo_limite_segundos integer,
+  ADD COLUMN IF NOT EXISTS questoes_respondidas integer NOT NULL DEFAULT 0;
+
+ALTER TABLE public.sessoes_simulado DROP CONSTRAINT IF EXISTS sessoes_simulado_status_check;
+ALTER TABLE public.sessoes_simulado ADD CONSTRAINT sessoes_simulado_status_check
+  CHECK (status = ANY (ARRAY[
+    'em_andamento'::text, 'concluido'::text, 'concluida'::text,
+    'abandonado'::text, 'expirada'::text, 'cancelada'::text
+  ]));
+
+CREATE TABLE IF NOT EXISTS public.modelos_simulado_areas (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  modelo_simulado_id uuid NOT NULL,
+  area text NOT NULL CHECK (area = ANY (ARRAY['matematica'::text, 'natureza'::text, 'humanas'::text, 'linguagens'::text, 'redacao'::text])),
+  quantidade_questoes integer NOT NULL CHECK (quantidade_questoes > 0),
+  CONSTRAINT modelos_simulado_areas_pkey PRIMARY KEY (id),
+  CONSTRAINT modelos_simulado_areas_modelo_fkey FOREIGN KEY (modelo_simulado_id) REFERENCES public.modelos_simulado(id) ON DELETE CASCADE,
+  CONSTRAINT modelos_simulado_areas_unicidade UNIQUE (modelo_simulado_id, area)
+);
+
+ALTER TABLE public.resultados_area_simulado
+  ADD COLUMN IF NOT EXISTS respondidas integer NOT NULL DEFAULT 0;

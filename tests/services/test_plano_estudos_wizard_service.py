@@ -70,8 +70,9 @@ def test_replanejar_apos_conclusao_nao_reoferece_aula_concluida():
             "materias_selecionadas": ["matematica"],
             "tempo_por_dia_minutos": 20,
             "dias_estudo": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
-        }]),
+        }]),  # update que toma o lock (replanejamento_em_andamento=True), com select
         query_result(data=[]),  # update final, resposta não é checada
+        query_result(data=[]),  # update que libera o lock (finally)
     ]
 
     fake.table("tipos_prova").execute.return_value = query_result(

@@ -53,7 +53,7 @@ class OllamaProvider(AIProvider):
         except httpx.HTTPError as erro:
             raise AIIndisponivelError(f"Falha ao chamar o Ollama: {erro}") from erro
 
-        conteudo = resposta.json()["message"]["content"]
+        conteudo = self._extrair_conteudo(resposta)
         return extrair_e_validar_json(conteudo, AvaliacaoArgumentativaIA)
 
     def responder_chat(self, mensagens: list[dict], contexto: dict | None = None) -> str:
@@ -75,7 +75,7 @@ class OllamaProvider(AIProvider):
         except httpx.HTTPError as erro:
             raise AIIndisponivelError(f"Falha ao chamar o Ollama: {erro}") from erro
 
-        return resposta.json()["message"]["content"]
+        return self._extrair_conteudo(resposta)
 
     def gerar_feedback(self, texto: str, contexto: dict | None = None) -> str:
         prompt = montar_prompt_feedback(texto, contexto)
@@ -118,6 +118,21 @@ class OllamaProvider(AIProvider):
         except httpx.HTTPError as erro:
             raise AIIndisponivelError(f"Falha ao chamar o Ollama: {erro}") from erro
 
-        conteudo = resposta.json()["message"]["content"]
+        conteudo = self._extrair_conteudo(resposta)
         resultado = extrair_e_validar_json(conteudo, QuestoesGeradasIA)
         return [q.model_dump() for q in resultado.questoes]
+
+    @staticmethod
+    def _extrair_conteudo(resposta: httpx.Response) -> str:
+        """Um HTTP 200 do Ollama não garante um corpo bem formado — sob
+        carga, ou com o modelo errado carregado, ele pode responder com um
+        JSON sem a chave "message"/"content". Tratamos isso como
+        indisponibilidade (mesmo caminho de erro de conexão/timeout) para
+        que o gerador de plano caia no fallback determinístico em vez de
+        estourar um KeyError não tratado.
+        """
+        corpo = resposta.json()
+        conteudo = corpo.get("message", {}).get("content")
+        if not conteudo:
+            raise AIIndisponivelError(f"Resposta do Ollama sem conteúdo utilizável: {corpo}")
+        return conteudo

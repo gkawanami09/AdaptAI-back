@@ -1,5 +1,5 @@
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
@@ -512,100 +512,122 @@ class PlanoEstudosWizardService:
         foi originalmente criado — é o mesmo raciocínio já documentado na
         criação do plano: instantâneo e não depende de um provider de IA
         disponível no meio do fluxo de estudo do aluno.
+
+        Protegido por um lock otimista (`replanejamento_em_andamento`): se
+        duas conclusões de aula chegarem quase juntas (duplo clique, retry,
+        duas abas) para o mesmo plano, a segunda chamada encontra o lock já
+        tomado e simplesmente não faz nada, em vez de correr em paralelo
+        com o DELETE/INSERT da primeira e gerar tarefas duplicadas ou uma
+        leitura no meio do caminho vendo um dia vazio.
         """
-        plano_resposta = (
+        lock_resposta = (
             supabase_admin
             .table("planos_estudo")
-            .select("id, status, provas_selecionadas, materias_selecionadas, tempo_por_dia_minutos, dias_estudo")
+            .update({"replanejamento_em_andamento": True})
             .eq("id", plano_id)
             .eq("usuario_id", usuario_id)
             .eq("status", "ativo")
-            .limit(1)
+            .eq("replanejamento_em_andamento", False)
+            .select("id, provas_selecionadas, materias_selecionadas, tempo_por_dia_minutos, dias_estudo")
             .execute()
         )
 
-        if not plano_resposta.data:
+        if not lock_resposta.data:
+            # Ou o plano não está mais ativo, ou já há um replanejamento
+            # em andamento para ele — nada a fazer aqui.
             return
 
-        plano = plano_resposta.data[0]
-        if not plano["dias_estudo"] or not plano["materias_selecionadas"] or not plano["provas_selecionadas"]:
-            return
+        try:
+            plano = lock_resposta.data[0]
+            if not plano["dias_estudo"] or not plano["materias_selecionadas"] or not plano["provas_selecionadas"]:
+                return
 
-        dados = PostCriarPlanoEstudosParams(
-            provas=plano["provas_selecionadas"],
-            materias=plano["materias_selecionadas"],
-            tempo_por_dia_minutos=plano["tempo_por_dia_minutos"],
-            dias_estudo=plano["dias_estudo"],
-            usar_ia=False,
-        )
-
-        contexto = self._montar_contexto(usuario_id, dados)
-        aulas_por_id: dict[str, AulaContexto] = {
-            aula.id: aula
-            for aulas in contexto.aulas_por_materia.values()
-            for aula in aulas
-        }
-        materia_id_por_slug = self._materia_id_por_slug(dados.materias)
-        materia_slug_por_id = {v: k for k, v in materia_id_por_slug.items()}
-
-        hoje = hoje_brasil()
-
-        tarefas = (
-            supabase_admin
-            .table("tarefas_estudo")
-            .select("id, materia_id, aula_id, status, data_agendada, concluido_em")
-            .eq("plano_estudo_id", plano_id)
-            .execute()
-            .data or []
-        )
-
-        concluidas = sorted(
-            (t for t in tarefas if t["status"] == "concluida" and t.get("aula_id")),
-            key=lambda t: t.get("concluido_em") or "",
-        )
-
-        historico_inicial: dict[str, list[AulaContexto]] = {}
-        aulas_ja_usadas: set[str] = set()
-        for tarefa in concluidas:
-            aula = aulas_por_id.get(tarefa["aula_id"])
-            materia_slug = materia_slug_por_id.get(tarefa["materia_id"])
-            if not aula or not materia_slug:
-                continue
-            historico_inicial.setdefault(materia_slug, []).append(aula)
-            aulas_ja_usadas.add(aula.id)
-
-        # Remove só as tarefas/sessões futuras ainda pendentes — passado e
-        # concluídas ficam intactos.
-        supabase_admin.table("tarefas_estudo") \
-            .delete() \
-            .eq("plano_estudo_id", plano_id) \
-            .eq("status", "pendente") \
-            .gte("data_agendada", hoje.isoformat()) \
-            .execute()
-
-        supabase_admin.table("planos_estudo_sessoes") \
-            .delete() \
-            .eq("plano_estudo_id", plano_id) \
-            .gte("data_agendada", hoje.isoformat()) \
-            .execute()
-
-        plano_gerado = DeterministicPlanGenerator().gerar(
-            contexto,
-            historico_inicial=historico_inicial,
-            aulas_ja_usadas=aulas_ja_usadas,
-            data_inicio_override=hoje,
-        )
-
-        if plano_gerado.avisos:
-            logger.info(
-                "plano_estudos_replanejamento_avisos plano_id=%s avisos=%s", plano_id, plano_gerado.avisos
+            dados = PostCriarPlanoEstudosParams(
+                provas=plano["provas_selecionadas"],
+                materias=plano["materias_selecionadas"],
+                tempo_por_dia_minutos=plano["tempo_por_dia_minutos"],
+                dias_estudo=plano["dias_estudo"],
+                usar_ia=False,
             )
 
-        self._persistir_sessoes_e_tarefas(plano_id, usuario_id, materia_id_por_slug, plano_gerado.dias)
+            contexto = self._montar_contexto(usuario_id, dados)
+            aulas_por_id: dict[str, AulaContexto] = {
+                aula.id: aula
+                for aulas in contexto.aulas_por_materia.values()
+                for aula in aulas
+            }
+            materia_id_por_slug = self._materia_id_por_slug(dados.materias)
+            materia_slug_por_id = {v: k for k, v in materia_id_por_slug.items()}
 
-        supabase_admin.table("planos_estudo").update({
-            "atualizado_em": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", plano_id).execute()
+            hoje = hoje_brasil()
+
+            tarefas = (
+                supabase_admin
+                .table("tarefas_estudo")
+                .select("id, materia_id, aula_id, status, data_agendada, concluido_em")
+                .eq("plano_estudo_id", plano_id)
+                .execute()
+                .data or []
+            )
+
+            concluidas = sorted(
+                (t for t in tarefas if t["status"] == "concluida" and t.get("aula_id")),
+                key=lambda t: t.get("concluido_em") or "",
+            )
+
+            historico_inicial: dict[str, list[AulaContexto]] = {}
+            aulas_ja_usadas: set[str] = set()
+            for tarefa in concluidas:
+                aula = aulas_por_id.get(tarefa["aula_id"])
+                materia_slug = materia_slug_por_id.get(tarefa["materia_id"])
+                if not aula or not materia_slug:
+                    continue
+                historico_inicial.setdefault(materia_slug, []).append(aula)
+                aulas_ja_usadas.add(aula.id)
+
+            # Remove só as tarefas/sessões futuras ainda pendentes — passado,
+            # concluídas e o dia de hoje ficam intactos. Hoje é deixado de
+            # fora de propósito: regerar o dia atual do zero reaplicava o
+            # tempo_por_dia_minutos inteiro sem descontar o que o aluno já
+            # tinha estudado hoje, então concluir 1 aula fazia surgir uma
+            # aula extra no mesmo dia (a próxima da fila) e empurrava toda
+            # a fila (e todos os dias seguintes) uma aula pra frente.
+            amanha = hoje + timedelta(days=1)
+
+            supabase_admin.table("tarefas_estudo") \
+                .delete() \
+                .eq("plano_estudo_id", plano_id) \
+                .eq("status", "pendente") \
+                .gte("data_agendada", amanha.isoformat()) \
+                .execute()
+
+            supabase_admin.table("planos_estudo_sessoes") \
+                .delete() \
+                .eq("plano_estudo_id", plano_id) \
+                .gte("data_agendada", amanha.isoformat()) \
+                .execute()
+
+            plano_gerado = DeterministicPlanGenerator().gerar(
+                contexto,
+                historico_inicial=historico_inicial,
+                aulas_ja_usadas=aulas_ja_usadas,
+                data_inicio_override=amanha,
+            )
+
+            if plano_gerado.avisos:
+                logger.info(
+                    "plano_estudos_replanejamento_avisos plano_id=%s avisos=%s", plano_id, plano_gerado.avisos
+                )
+
+            self._persistir_sessoes_e_tarefas(plano_id, usuario_id, materia_id_por_slug, plano_gerado.dias)
+
+            supabase_admin.table("planos_estudo").update({
+                "atualizado_em": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", plano_id).execute()
+        finally:
+            supabase_admin.table("planos_estudo").update({
+                "replanejamento_em_andamento": False,
+            }).eq("id", plano_id).execute()
 
     def sincronizar_tarefas(self, plano_id: str, usuario_id: str) -> int:
         """Recria as tarefas_estudo (usadas pela tela do dia) a partir das
