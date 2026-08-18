@@ -18,6 +18,7 @@ from routers.admin import conquistas as admin_conquistas
 from routers.admin import missoes as admin_missoes
 from routers.admin import gamificacao as admin_gamificacao
 from routers.admin import monitoramento as admin_monitoramento
+from routers.admin import areas_conhecimento as admin_areas_conhecimento
 from services.monitoramento import monitor
 
 app = FastAPI()
@@ -38,11 +39,11 @@ async def middleware_telemetria(request: Request, call_next):
         resposta = await call_next(request)
     except Exception:
         duracao_ms = (time.perf_counter() - inicio) * 1000
-        monitor.registrar_request(request.url.path, duracao_ms, status_code=500)
+        monitor.registrar_request(request.method, request.url.path, duracao_ms, status_code=500)
         raise
 
     duracao_ms = (time.perf_counter() - inicio) * 1000
-    monitor.registrar_request(request.url.path, duracao_ms, resposta.status_code)
+    monitor.registrar_request(request.method, request.url.path, duracao_ms, resposta.status_code)
     return resposta
 
 app.include_router(auth.router)
@@ -62,6 +63,7 @@ app.include_router(admin_conquistas.router)
 app.include_router(admin_missoes.router)
 app.include_router(admin_gamificacao.router)
 app.include_router(admin_monitoramento.router)
+app.include_router(admin_areas_conhecimento.router)
 app.include_router(dashboard.router)
 app.include_router(plano_estudos.router)
 app.include_router(aula_visualizacao.router)

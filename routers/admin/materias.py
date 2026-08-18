@@ -147,10 +147,10 @@ def buscar_materias(materia_id: UUID):
             )
         
         materia = resposta.data[0]
-        
+
         return{
             'sucesso' : True,
-            'matéria' : materia
+            'materia' : materia
         }
     
     except HTTPException:
@@ -304,4 +304,77 @@ def editar_materia(
             status_code=500,
             detail="Erro ao atualizar matéria"
         )
-    
+
+
+# Bloqueia a exclusão se houver conteúdo real vinculado (aulas/tópicos/
+# questões/listas de questões) — sem isso, o DELETE quebraria com um erro
+# de FK constraint cru (500) em vez de uma mensagem que o admin entenda.
+# Nesses casos, o caminho é inativar a matéria (PATCH ativo=false), não
+# excluir.
+def _dependencias_materia(materia_id: UUID) -> list[str]:
+    dependencias = []
+
+    contagens = {
+        'aulas': 'aula(s)',
+        'topicos': 'tópico(s)',
+        'questoes': 'questão(ões)',
+        'listas_questoes': 'lista(s) de questões',
+    }
+
+    for tabela, rotulo in contagens.items():
+        resposta = (
+            supabase_admin.table(tabela)
+            .select('id', count='exact')
+            .eq('materia_id', str(materia_id))
+            .execute()
+        )
+        total = resposta.count or 0
+        if total:
+            dependencias.append(f"{total} {rotulo}")
+
+    return dependencias
+
+
+@router.delete('/{materia_id}')
+def excluir_materia(materia_id: UUID):
+    try:
+        resposta = (supabase_admin.table('materias')
+                    .select('id')
+                    .eq('id', str(materia_id))
+                    .limit(1)
+                    .execute()
+                    )
+
+        if not resposta.data:
+            raise HTTPException(
+                status_code=404,
+                detail='Matéria não encontrada'
+            )
+
+        dependencias = _dependencias_materia(materia_id)
+        if dependencias:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Não é possível excluir: há " + ", ".join(dependencias)
+                    + " vinculada(s) a essa matéria. Inative-a em vez de excluir."
+                )
+            )
+
+        supabase_admin.table('materias').delete().eq('id', str(materia_id)).execute()
+
+        return {
+            "sucesso": True,
+            "mensagem": "Matéria excluída com sucesso"
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao excluir matéria: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao excluir matéria"
+        )

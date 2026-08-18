@@ -45,7 +45,7 @@ ORDENACAO = {
 def obter_estatisticas(usuario_id: str) -> dict:
     resposta = (
         supabase_admin.table("estatisticas_usuario")
-        .select("ofensiva_atual_dias, maior_ofensiva_dias, xp_total")
+        .select("ofensiva_atual_dias, maior_ofensiva_dias, xp_total, nivel")
         .eq("usuario_id", usuario_id)
         .limit(1)
         .execute()
@@ -53,7 +53,22 @@ def obter_estatisticas(usuario_id: str) -> dict:
     )
     if resposta:
         return resposta[0]
-    return {"ofensiva_atual_dias": 0, "maior_ofensiva_dias": 0, "xp_total": 0}
+    return {"ofensiva_atual_dias": 0, "maior_ofensiva_dias": 0, "xp_total": 0, "nivel": 1}
+
+
+# Mesma origem usada em GET /aluno/configuracoes (routers/configuracoes_aluno.py:montar_perfil)
+def obter_ano_enem(usuario_id: str) -> str | None:
+    resposta = (
+        supabase_admin.table("preferencias_aluno")
+        .select("ano_alvo")
+        .eq("usuario_id", usuario_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if resposta and resposta[0].get("ano_alvo"):
+        return str(resposta[0]["ano_alvo"])
+    return None
 
 
 # Builds the UsuarioDetalhe-shaped dict from a perfil row + auth user
@@ -116,6 +131,9 @@ def montar_usuario_detalhe(perfil: dict, usuario_auth=None):
         "ofensiva_atual": estatisticas.get("ofensiva_atual_dias", 0),
         "maior_ofensiva": estatisticas.get("maior_ofensiva_dias", 0),
         "xp": estatisticas.get("xp_total", 0),
+        "nivel": estatisticas.get("nivel", 1),
+        "escola": perfil.get("escola_nome"),
+        "ano_enem": obter_ano_enem(usuario_id),
         "questoes_respondidas": questoes_respondidas,
         "taxa_acerto": taxa_acerto,
         "tempo_estudo_min": tempo_estudo_min,
@@ -168,12 +186,25 @@ def listar_usuarios(
         ids_perfis = [perfil["id"] for perfil in perfis]
         estatisticas_linhas = (
             supabase_admin.table("estatisticas_usuario")
-            .select("usuario_id, ofensiva_atual_dias, xp_total")
+            .select("usuario_id, ofensiva_atual_dias, xp_total, nivel")
             .in_("usuario_id", ids_perfis)
             .execute()
             .data or []
         ) if ids_perfis else []
         estatisticas_por_usuario = {linha["usuario_id"]: linha for linha in estatisticas_linhas}
+
+        preferencias_linhas = (
+            supabase_admin.table("preferencias_aluno")
+            .select("usuario_id, ano_alvo")
+            .in_("usuario_id", ids_perfis)
+            .execute()
+            .data or []
+        ) if ids_perfis else []
+        ano_enem_por_usuario = {
+            linha["usuario_id"]: str(linha["ano_alvo"])
+            for linha in preferencias_linhas
+            if linha.get("ano_alvo")
+        }
 
         usuarios = [
             {
@@ -186,6 +217,9 @@ def listar_usuarios(
                 "ofensiva_atual": estatisticas_por_usuario.get(perfil["id"], {}).get("ofensiva_atual_dias", 0),
                 "xp": estatisticas_por_usuario.get(perfil["id"], {}).get("xp_total", 0),
                 "ultimo_acesso": None,
+                "nivel": estatisticas_por_usuario.get(perfil["id"], {}).get("nivel", 1),
+                "escola": perfil.get("escola_nome"),
+                "ano_enem": ano_enem_por_usuario.get(perfil["id"]),
             }
             for perfil in perfis
         ]

@@ -15,11 +15,12 @@ class MateriaCriar(BaseModel):
 
     icone: str
     cor: str
+    descricao: str | None = None
 
     ordem: int = Field(default=0, ge=0)
     ativo: bool = True
-    
-    
+
+
 class MateriaEditar(BaseModel):
     nome: str | None = Field(
         default=None,
@@ -37,5 +38,6 @@ class MateriaEditar(BaseModel):
 
     icone: str | None = None
     cor: str | None = None
+    descricao: str | None = None
     ordem: int | None = Field(default=None, ge=0)
     ativo: bool | None = None
