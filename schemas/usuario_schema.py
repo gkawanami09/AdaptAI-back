@@ -36,6 +36,7 @@ class UsuarioEditar(BaseModel):
     nome: str | None = Field(default=None, min_length=2, max_length=100)
     email: EmailStr | None = None
     cargo: Literal["aluno", "professor", "admin", "administrador"] | None = None
+    status: Literal["ativo", "inativo", "suspenso", "banido"] | None = None
 
 
 class UsuarioCargoEditar(BaseModel):

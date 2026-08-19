@@ -16,7 +16,7 @@ router = APIRouter(
     dependencies=[Depends(exigir_administrador)]
 )
 
-STATUS_PARA_SITUACAO = {"ativo": "ativo", "suspenso": "suspenso", "banido": "bloqueado"}
+STATUS_PARA_SITUACAO = {"ativo": "ativo", "inativo": "suspenso", "suspenso": "suspenso", "banido": "bloqueado"}
 SITUACAO_PARA_STATUS = {"ativo": "ativo", "suspenso": "suspenso", "bloqueado": "banido"}
 
 CARGOS_VALIDOS = {"aluno", "professor", "admin"}
@@ -356,7 +356,7 @@ def buscar_usuario(usuario_id: UUID):
 
 
 @router.patch('/{usuario_id}')
-def editar_usuario(usuario_id: UUID, dados: UsuarioEditar):
+def editar_usuario(usuario_id: UUID, dados: UsuarioEditar, usuario_atual=Depends(pegar_usuario_atual)):
     try:
         alteracoes = dados.model_dump(exclude_unset=True)
 
@@ -371,6 +371,14 @@ def editar_usuario(usuario_id: UUID, dados: UsuarioEditar):
             alteracoes["nome"] = alteracoes["nome"].strip()
         if "cargo" in alteracoes:
             alteracoes["tipo_usuario"] = normalizar_cargo(alteracoes.pop("cargo"))
+        if "status" in alteracoes:
+            status = alteracoes.pop("status")
+            if usuario_atual and str(usuario_atual.id) == str(usuario_id) and status != "ativo":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Você não pode inativar a própria conta"
+                )
+            alteracoes["situacao"] = STATUS_PARA_SITUACAO[status]
 
         if email:
             supabase_admin.auth.admin.update_user_by_id(

@@ -190,6 +190,33 @@ def test_banir_usuario_insere_acao_administrativa(app_cliente):
     assert dados_inseridos["motivo"] == "conduta grave"
 
 
+def test_editar_usuario_status_inativo_persiste_situacao_suspenso(app_cliente):
+    cliente, fake = app_cliente
+
+    fake.table("perfis").execute.return_value = query_result(data=[{
+        "id": USUARIO_ID,
+        "nome": "Usuário Teste",
+        "tipo_usuario": "aluno",
+        "situacao": "suspenso",
+        "criado_em": "2026-01-01T00:00:00Z",
+    }])
+
+    resposta = cliente.patch(f"/admin/usuarios/{USUARIO_ID}", json={"status": "inativo"})
+
+    assert resposta.status_code == 200
+    fake.table("perfis").update.assert_called_once_with({"situacao": "suspenso"})
+    assert resposta.json()["usuario"]["status"] == "suspenso"
+
+
+def test_editar_usuario_nao_permite_admin_se_auto_inativar(app_cliente):
+    cliente, fake = app_cliente
+    _mock_usuario_existe(fake, usuario_id=ADMIN_ID)
+
+    resposta = cliente.patch(f"/admin/usuarios/{ADMIN_ID}", json={"status": "inativo"})
+
+    assert resposta.status_code == 400
+
+
 def test_resetar_ofensiva_atualiza_estatisticas_e_insere_acao(app_cliente):
     cliente, fake = app_cliente
 
