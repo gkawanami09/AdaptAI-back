@@ -1,0 +1,337 @@
+[
+  {
+    "id": "0dcbbe41-b1a5-46dc-8c59-8fa3cd0ec5dd",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Análise combinatória e probabilidade"
+  },
+  {
+    "id": "7df2845d-d774-4957-bada-08f65155adbe",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Análise de redações nota 1000"
+  },
+  {
+    "id": "ed037a79-801b-45b3-a8ad-31ff6e4e4e9b",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Cinemática (MU e MUV)"
+  },
+  {
+    "id": "79fcb37c-4d39-4a3b-ad2e-b77f34132d88",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Cinética química"
+  },
+  {
+    "id": "3ffcda07-efb4-4935-9c99-c7c70968d956",
+    "materia_id": "0aea872e-c91b-4cc0-9c94-c7aee3e57f62",
+    "titulo": "Citologia"
+  },
+  {
+    "id": "d987f4bd-deeb-455b-a748-997b49414b98",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Coesão e coerência textual"
+  },
+  {
+    "id": "44f5f2af-279e-4d18-b4c7-5fb70503222a",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Comércio mundial e blocos econômicos"
+  },
+  {
+    "id": "b660a7db-a013-428e-945d-17ad1e1ac7df",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Como escrever uma redação do zero"
+  },
+  {
+    "id": "336f5779-d1fb-4814-8577-c2e00e80a200",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Competência 1 — norma culta da língua"
+  },
+  {
+    "id": "988feb8f-d3bc-4e17-b2a2-f2a010ef166e",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Competência 2 — compreensão do tema"
+  },
+  {
+    "id": "db3f79cc-a9ac-4042-9950-cc4f6f8c3872",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Competência 3 — argumentação"
+  },
+  {
+    "id": "8f0be014-fca2-4dc7-8b14-84ffdd6d6982",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Competência 4 — coesão textual"
+  },
+  {
+    "id": "73229bce-d367-40cd-9ec8-68418681fee9",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Competência 5 — proposta de intervenção"
+  },
+  {
+    "id": "a57149cb-8360-4a5e-9c10-71162102cee3",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Demografia e população"
+  },
+  {
+    "id": "3d9dc9c0-9944-48a3-8a62-679f6a540149",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Descolonização da África e diáspora africana"
+  },
+  {
+    "id": "33ccd10c-0039-4e61-bb25-8ce3cae9d5c2",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Ditadura Militar e redemocratização"
+  },
+  {
+    "id": "6cc0c406-615b-454c-930e-dfb7cc4255d8",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Domínios morfoclimáticos do Brasil"
+  },
+  {
+    "id": "6372a3e1-63fc-4705-9462-dfe3bcd4b915",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Eletrodinâmica (circuitos, potência elétrica)"
+  },
+  {
+    "id": "499a88dd-09c5-456f-a122-89af7c0f163e",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Eletroquímica (pilhas)"
+  },
+  {
+    "id": "f238c588-ab0a-4191-b090-11bc66dfcb88",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Eletrostática"
+  },
+  {
+    "id": "57195f10-b7c2-41db-a990-720af8160a65",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Energia elétrica no cotidiano"
+  },
+  {
+    "id": "267e49a3-9f04-4c5b-82c0-4def73c4db4a",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Energia mecânica e trabalho"
+  },
+  {
+    "id": "4de042cc-a1c6-4d2a-ba0f-6beca01d746d",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Era Vargas"
+  },
+  {
+    "id": "2aad9b84-bf73-4c13-a519-bac7a1ba1305",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Escravidão no Brasil"
+  },
+  {
+    "id": "a6494da9-acc6-4d78-8831-24295191d8f1",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Estatística básica (média, moda, mediana)"
+  },
+  {
+    "id": "c27d219a-44b4-4cca-ab04-b44b004190c0",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Estequiometria"
+  },
+  {
+    "id": "b544301b-7825-4e72-909d-b78f9b8d4f33",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Estrutura dissertativo-argumentativa"
+  },
+  {
+    "id": "41cea05a-f356-4782-a538-b8f3057eb81a",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Figuras de linguagem"
+  },
+  {
+    "id": "9c2fc33d-b8c5-420b-89d1-bceee0210e7b",
+    "materia_id": "0aea872e-c91b-4cc0-9c94-c7aee3e57f62",
+    "titulo": "Fisiologia humana"
+  },
+  {
+    "id": "5f984a91-030b-4219-b321-e3b23dc4e18b",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Funções da linguagem"
+  },
+  {
+    "id": "d1a318bf-01ab-461a-a83f-2d4b53f16cc1",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Gêneros textuais"
+  },
+  {
+    "id": "9ad46785-7383-4d82-aaeb-93abd1c264ba",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Geometria espacial (volumes)"
+  },
+  {
+    "id": "263b4332-6eb3-4ca0-a5a5-e5d7400da298",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Geometria plana (áreas e perímetros)"
+  },
+  {
+    "id": "88456284-2cbc-4a69-8814-9121f94cf4fd",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Geopolítica mundial"
+  },
+  {
+    "id": "16586b46-e416-4b32-b04a-2280a3963ecb",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Globalização"
+  },
+  {
+    "id": "ab7fad3f-446e-488b-9308-50d8eafcccdf",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Guerra Fria e Segunda Guerra Mundial"
+  },
+  {
+    "id": "0fc5e758-2a63-4e27-9757-2b6e73547dfe",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Hidrostática (Pascal, Arquimedes, Stevin)"
+  },
+  {
+    "id": "68b20343-4824-426b-bcd1-aa508349f22e",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Independência e Brasil Império"
+  },
+  {
+    "id": "cf11a9f9-6732-42e4-b7f3-3f043b54478c",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Industrialização e agricultura brasileira"
+  },
+  {
+    "id": "f9f63aa1-323f-4da9-ad47-3bd4e7101629",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Interpretação de texto"
+  },
+  {
+    "id": "d7d3c820-3929-4e96-bd38-493069afb652",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Intertextualidade"
+  },
+  {
+    "id": "c2ca95fc-8a71-4970-b18f-9ffd2ab1d522",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Leis de Newton"
+  },
+  {
+    "id": "5efd3856-77a7-4694-87e6-ff09ed5087f1",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Ligações químicas"
+  },
+  {
+    "id": "43db4a3f-1ddf-4806-980f-9e06dcbf9a63",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Literatura contemporânea"
+  },
+  {
+    "id": "7985caa1-1fdc-43e8-a3a8-eb55397466f7",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Migrações"
+  },
+  {
+    "id": "6528b6f6-9200-4279-951b-26c35add887a",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Modernismo"
+  },
+  {
+    "id": "4c0973af-a322-4625-a7b8-f02f7cfab3a7",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Movimentos sociais e cidadania (séc. XX-XXI)"
+  },
+  {
+    "id": "541e7008-ee76-408f-a9d8-cd07b6bd520b",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Mudanças climáticas e desmatamento"
+  },
+  {
+    "id": "821724a3-ea85-4d1f-9d8b-74d50a497e8f",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Ondulatória"
+  },
+  {
+    "id": "d7cd72c6-3a3c-4254-9b4e-56140d434243",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Óptica"
+  },
+  {
+    "id": "99340b7c-9fd7-4d41-a72b-68743648c696",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Período colonial"
+  },
+  {
+    "id": "22aed593-ce43-403f-b7c6-fdc76ca32c98",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Petróleo e polímeros"
+  },
+  {
+    "id": "d1d08880-2816-4717-a918-86e8e601751b",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "pH e equilíbrio químico"
+  },
+  {
+    "id": "70bf9a08-c83c-424d-a7c4-5ecf7516716b",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Porcentagem"
+  },
+  {
+    "id": "44307085-5bfa-48ac-aa50-d300345cbf99",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Progressões (PA e PG)"
+  },
+  {
+    "id": "4de5f76b-396e-4589-8971-843c7bfcd793",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Questão agrária e concentração fundiária"
+  },
+  {
+    "id": "8e857de5-3a11-4032-ad37-85eb9a9daf09",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Química ambiental"
+  },
+  {
+    "id": "8b63f57d-bf5c-47b2-82a0-76dd911f389c",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Química orgânica — funções orgânicas"
+  },
+  {
+    "id": "f425c14d-8128-4006-b93b-7ea89884301f",
+    "materia_id": "c29992d5-8063-405e-89e8-236cec8ffc2d",
+    "titulo": "Razão, proporção e regra de três"
+  },
+  {
+    "id": "79f6246c-2099-4add-913d-ac36d1d4cc6f",
+    "materia_id": "a28a5651-7c92-4450-bb2d-fc00d3fc387d",
+    "titulo": "Repertório sociocultural"
+  },
+  {
+    "id": "aa20a0e3-efef-4d93-8097-8d5d47878b57",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Revolução Francesa"
+  },
+  {
+    "id": "7419de30-a115-4358-808b-d246bde41ae7",
+    "materia_id": "0d5da9e8-699c-4fb3-84b1-5b66f92ab6fa",
+    "titulo": "Revolução Industrial"
+  },
+  {
+    "id": "9f6fe577-544d-4c26-88a4-b7a94ce10649",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Soluções e concentração"
+  },
+  {
+    "id": "f57c8a26-5e84-432f-ac8d-47b800241b85",
+    "materia_id": "85d35541-245b-4ee8-969a-a3451e393775",
+    "titulo": "Termologia (calor, dilatação)"
+  },
+  {
+    "id": "64ca6147-bfb8-4208-83cb-8dd2caf6cce4",
+    "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+    "titulo": "Termoquímica"
+  },
+  {
+    "id": "4eb833e2-311a-4484-8af9-708956bd0df2",
+    "materia_id": "106df0d7-e9eb-4132-8a36-40ac3c22ede1",
+    "titulo": "Urbanização brasileira"
+  },
+  {
+    "id": "733764ea-cb5f-4569-8d38-7334766348af",
+    "materia_id": "94fd268b-7003-4ce5-b63f-9ddf8cc877c7",
+    "titulo": "Variação linguística"
+  }
+]
