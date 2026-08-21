@@ -499,12 +499,9 @@ def finalizar_lista(slug: str, usuario_atual=Depends(pegar_usuario_atual)):
                 "questoes_totais": len(ids_questoes),
             }
 
-        if concluidas < len(ids_questoes):
-            raise HTTPException(
-                status_code=422,
-                detail="Existem questões pendentes de resposta"
-            )
-
+        # Finalizar não exige mais 100% respondido — o aluno pode encerrar
+        # com questões em branco, que entram como erradas/pendentes no
+        # resultado em vez de travar a finalização.
         agora = datetime.now(timezone.utc).isoformat()
         supabase_admin.table("progresso_lista_questoes_aluno").update({
             "status": "finalizada",

@@ -9,7 +9,7 @@ from services.ai.prompts.explicacao import montar_prompt_explicacao_erro
 from services.ai.prompts.feedback import SYSTEM_PROMPT as FEEDBACK_SYSTEM_PROMPT
 from services.ai.prompts.feedback import montar_prompt_feedback
 from services.ai.prompts.questoes import SYSTEM_PROMPT as QUESTOES_SYSTEM_PROMPT
-from services.ai.prompts.questoes import montar_prompt_gerar_questoes
+from services.ai.prompts.questoes import montar_prompt_gerar_questoes, estimar_max_tokens_questoes
 from services.ai.schemas.correcao_ia_schema import AvaliacaoArgumentativaIA
 from services.ai.schemas.questoes_geradas_schema import QuestoesGeradasIA
 
@@ -104,8 +104,18 @@ class OpenAICompatibleProvider(AIProvider):
         ]
         return self.responder_chat(mensagens)
 
-    def gerar_questoes(self, materia: str, topico: str, quantidade: int) -> list[dict]:
-        prompt = montar_prompt_gerar_questoes(materia, topico, quantidade)
+    def gerar_questoes(
+        self,
+        quantidade: int,
+        materias: list[str] | None = None,
+        assuntos: list[str] | None = None,
+        dificuldades: list[str] | None = None,
+        vestibulares: list[str] | None = None,
+        instrucao: str | None = None,
+    ) -> list[dict]:
+        prompt = montar_prompt_gerar_questoes(
+            quantidade, materias, assuntos, dificuldades, vestibulares, instrucao
+        )
 
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
@@ -119,7 +129,7 @@ class OpenAICompatibleProvider(AIProvider):
                         {"role": "user", "content": prompt},
                     ],
                     "response_format": {"type": "json_object"},
-                    "max_tokens": self._max_tokens,
+                    "max_tokens": estimar_max_tokens_questoes(quantidade, self._max_tokens),
                     "temperature": self._temperature,
                 },
                 headers=headers,

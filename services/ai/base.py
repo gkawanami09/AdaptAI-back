@@ -60,5 +60,13 @@ class AIProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def gerar_questoes(self, materia: str, topico: str, quantidade: int) -> list[dict]:
+    def gerar_questoes(
+        self,
+        quantidade: int,
+        materias: list[str] | None = None,
+        assuntos: list[str] | None = None,
+        dificuldades: list[str] | None = None,
+        vestibulares: list[str] | None = None,
+        instrucao: str | None = None,
+    ) -> list[dict]:
         raise NotImplementedError

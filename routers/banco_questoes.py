@@ -1,21 +1,22 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from database import supabase_admin
 from typing import Literal
 from uuid import UUID
+from datetime import datetime, timezone
 from utils.autenticacao import pegar_usuario_atual
 from utils.textos import gerar_slug
 from schemas.banco_questoes_schema import (
     BancoQuestoesFiltrosResponse,
     BancoQuestoesListasResponse,
     BancoQuestoesQuestoesRespondidasResponse,
-    GerarListaIAResponse,
+    GerarListaIARequest,
+    GerarListaIAJobResponse,
+    GeracaoIAStatusResponse,
     RefazerListaResponse,
     RevisaoExecucaoResponse,
 )
 from services.ai.factory import get_ai_provider
 from services.ai.base import AIIndisponivelError, AIRespostaInvalidaError
-
-QUANTIDADE_QUESTOES_LISTA_IA = 10
 
 router = APIRouter(
     prefix='/aluno/banco-questoes',
@@ -186,6 +187,16 @@ def montar_listas(
 
     listas_banco = consulta.execute().data or []
 
+    # Listas do catálogo compartilhado têm usuario_id nulo (visíveis pra
+    # todo mundo); listas personalizadas (geradas por IA) têm usuario_id
+    # do dono e só devem aparecer pra ele — sem isso a listagem vazava a
+    # lista personalizada (título, matéria) de qualquer aluno pra qualquer
+    # outro aluno logado.
+    listas_banco = [
+        lista for lista in listas_banco
+        if not lista.get("usuario_id") or lista["usuario_id"] == usuario_id
+    ]
+
     if apenas_erradas:
         ids_questoes_erradas = {
             t["questao_id"]
@@ -303,6 +314,7 @@ def montar_listas(
             "questoes_corretas": corretas,
             "progresso_cor": materia["cor"] if materia else PROGRESSO_COR_PADRAO,
             "ultima_execucao_id": execucao["id"] if execucao else None,
+            "personalizada": lista.get("usuario_id") == usuario_id,
         })
 
     return listas
@@ -396,6 +408,57 @@ def refazer_lista(lista_id: UUID, usuario_atual=Depends(pegar_usuario_atual)):
         raise HTTPException(
             status_code=500,
             detail="Erro ao refazer lista de questões"
+        )
+
+
+@router.delete('/listas/{lista_id}', status_code=204)
+def excluir_lista_personalizada(lista_id: UUID, usuario_atual=Depends(pegar_usuario_atual)):
+    try:
+        id_usuario = str(usuario_atual.id)
+
+        lista = (
+            supabase_admin.table("listas_questoes")
+            .select("id, usuario_id")
+            .eq("id", str(lista_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not lista:
+            raise HTTPException(status_code=404, detail="Lista de questões não encontrada")
+
+        # usuario_id nulo = lista do catálogo compartilhado (nunca
+        # deletável por aluno); usuario_id de outro aluno = não é dono.
+        # Os dois casos usam o mesmo 403 pra não vazar se a lista existe
+        # e a quem pertence.
+        if lista[0]["usuario_id"] != id_usuario:
+            raise HTTPException(
+                status_code=403,
+                detail="Só é possível excluir listas personalizadas próprias"
+            )
+
+        supabase_admin.table("respostas_lista_questoes_aluno").delete().eq(
+            "lista_questoes_id", str(lista_id)
+        ).execute()
+        supabase_admin.table("progresso_lista_questoes_aluno").delete().eq(
+            "lista_questoes_id", str(lista_id)
+        ).execute()
+        supabase_admin.table("itens_lista_questoes").delete().eq(
+            "lista_questoes_id", str(lista_id)
+        ).execute()
+        supabase_admin.table("listas_questoes").delete().eq("id", str(lista_id)).execute()
+
+        return None
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao excluir lista personalizada: {erro}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao excluir lista personalizada"
         )
 
 
@@ -892,73 +955,117 @@ def gerar_slug_unico_lista(titulo: str) -> str:
     return slug
 
 
-@router.post('/listas/gerar-ia', status_code=201, response_model=GerarListaIAResponse)
-def gerar_lista_ia(usuario_atual=Depends(pegar_usuario_atual)):
-    try:
-        id_usuario = str(usuario_atual.id)
+def _resolver_ids_por_slug(tabela: str, slugs: list[str], rotulo: str, coluna_id: str = "id") -> list[dict]:
+    """Resolve uma lista de slugs (matéria/assunto/vestibular) pra suas linhas
+    reais na tabela, ou levanta 400 citando o primeiro slug que não existir —
+    evita gerar uma lista "órfã" com filtro silenciosamente ignorado.
 
-        tentativas = (
-            supabase_admin.table("tentativas_questoes")
-            .select("id", count="exact")
-            .eq("usuario_id", id_usuario)
-            .execute()
+    `coluna_id` existe porque `topicos` usa `topico_id` como chave primária
+    (não `id`, como `materias`/`tipos_prova`) — o alias `id:coluna_id` do
+    PostgREST normaliza o retorno pra sempre ter a chave "id"."""
+    if not slugs:
+        return []
+
+    campo_select = "id, nome, slug" if coluna_id == "id" else f"id:{coluna_id}, nome, slug"
+
+    linhas = (
+        supabase_admin.table(tabela)
+        .select(campo_select)
+        .in_("slug", slugs)
+        .execute()
+        .data or []
+    )
+
+    slugs_encontrados = {linha["slug"] for linha in linhas}
+    faltando = [s for s in slugs if s not in slugs_encontrados]
+    if faltando:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{rotulo} inválido(s): {', '.join(faltando)}"
         )
 
-        if not tentativas.count:
-            raise HTTPException(
-                status_code=422,
-                detail="Não há dados suficientes para gerar uma lista personalizada"
-            )
+    return linhas
 
-        materia = materia_com_mais_erros(id_usuario)
-        if not materia:
-            raise HTTPException(
-                status_code=422,
-                detail="Não há dados suficientes para gerar uma lista personalizada"
-            )
 
-        try:
-            questoes_geradas = get_ai_provider().gerar_questoes(
-                materia=materia["nome"],
-                topico=materia["nome"],
-                quantidade=QUANTIDADE_QUESTOES_LISTA_IA,
+def _gerar_lista_ia_em_background(
+    job_id: str,
+    id_usuario: str,
+    quantidade: int,
+    materias_slugs: list[str],
+    materias_linhas: list[dict],
+    assuntos_labels: list[str],
+    dificuldades: list[str],
+    vestibulares_labels: list[str],
+    tipo_prova_id: str | None,
+    instrucao: str | None,
+):
+    """Roda fora do request/response cycle (FastAPI BackgroundTasks) — o
+    endpoint já respondeu 202 antes desta função começar. Qualquer exceção
+    aqui não chega ao cliente por HTTPException; por isso captura tudo e
+    grava o erro na própria linha de geracoes_ia_listas pro polling ler."""
+    try:
+        materia_para_questoes = None
+        materia_para_lista_id = None
+        titulo_materia = None
+
+        if materias_linhas:
+            # Simplificação deliberada: a IA pode misturar matérias no
+            # enunciado, mas cada questão salva precisa de 1 materia_id
+            # (NOT NULL). Com múltiplas matérias selecionadas, usamos a
+            # primeira pra todas as questões geradas nesta leva.
+            materia_para_questoes = materias_linhas[0]
+            materia_para_lista_id = materias_linhas[0]["id"] if len(materias_linhas) == 1 else None
+            titulo_materia = (
+                materias_linhas[0]["nome"] if len(materias_linhas) == 1
+                else " + ".join(m["nome"] for m in materias_linhas)
             )
-        except (AIIndisponivelError, AIRespostaInvalidaError) as erro:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Não foi possível gerar questões com IA: {erro}"
-            )
+        else:
+            materia_para_questoes = materia_com_mais_erros(id_usuario)
+            if not materia_para_questoes:
+                raise ValueError(
+                    "Selecione ao menos uma matéria — ainda não há dados de erros "
+                    "suficientes pra escolher uma automaticamente."
+                )
+            materia_para_lista_id = materia_para_questoes["id"]
+            titulo_materia = materia_para_questoes["nome"]
+
+        questoes_geradas = get_ai_provider().gerar_questoes(
+            quantidade=quantidade,
+            materias=[m["nome"] for m in materias_linhas] or None,
+            assuntos=assuntos_labels or None,
+            dificuldades=dificuldades or None,
+            vestibulares=vestibulares_labels or None,
+            instrucao=instrucao,
+        )
 
         if not questoes_geradas:
-            raise HTTPException(
-                status_code=502,
-                detail="A IA não retornou nenhuma questão"
-            )
+            raise ValueError("A IA não retornou nenhuma questão")
 
-        titulo = f"Lista personalizada — {materia['nome']}"
+        titulo = f"Lista personalizada — {titulo_materia}"
         nova_lista = {
             "titulo": titulo,
             "slug": gerar_slug_unico_lista(titulo),
-            "materia_id": materia["id"],
-            "tipo_prova_id": None,
+            "materia_id": materia_para_lista_id,
+            "tipo_prova_id": tipo_prova_id,
             "topico_id": None,
-            "dificuldade": None,
+            "dificuldade": dificuldades[0] if len(dificuldades) == 1 else None,
             "tipo_lista": "gerada_ia",
+            # Sem isso a lista fica "órfã" (usuario_id nulo = mesmo bucket
+            # das listas do catálogo compartilhado) e nem o filtro de posse
+            # em GET /listas nem o DELETE novo conseguem saber que essa
+            # lista é pessoal do aluno que pediu a geração.
+            "usuario_id": id_usuario,
         }
 
         resposta_lista = supabase_admin.table("listas_questoes").insert(nova_lista).execute()
-
         if not resposta_lista.data:
-            raise HTTPException(
-                status_code=500,
-                detail="Não foi possível criar a lista de questões"
-            )
+            raise ValueError("Não foi possível criar a lista de questões")
 
         lista_id = resposta_lista.data[0]["id"]
 
         for ordem, questao_gerada in enumerate(questoes_geradas):
             nova_questao = {
-                "materia_id": materia["id"],
+                "materia_id": materia_para_questoes["id"],
                 "dificuldade": questao_gerada.get("dificuldade") or "medio",
                 "enunciado": questao_gerada["enunciado"],
                 "explicacao": questao_gerada.get("explicacao"),
@@ -1002,25 +1109,156 @@ def gerar_lista_ia(usuario_atual=Depends(pegar_usuario_atual)):
 
         lista_criada = (
             supabase_admin.table("listas_questoes")
-            .select("*")
+            .select("id, slug")
             .eq("id", lista_id)
             .limit(1)
             .execute()
             .data[0]
         )
 
-        return {
-            "id": lista_criada["id"],
-            "slug": lista_criada.get("slug"),
-        }
+        supabase_admin.table("geracoes_ia_listas").update({
+            "status": "concluido",
+            "lista_questoes_id": lista_criada["id"],
+        }).eq("id", job_id).execute()
+
+    except (AIIndisponivelError, AIRespostaInvalidaError) as erro:
+        supabase_admin.table("geracoes_ia_listas").update({
+            "status": "erro",
+            "mensagem_erro": f"Não foi possível gerar questões com IA: {erro}",
+        }).eq("id", job_id).execute()
+
+    except Exception as erro:
+        print(f"Erro ao gerar lista com IA (job {job_id}): {erro}")
+        supabase_admin.table("geracoes_ia_listas").update({
+            "status": "erro",
+            "mensagem_erro": str(erro),
+        }).eq("id", job_id).execute()
+
+
+_STATUS_DB_PARA_API = {"gerando": "processando", "concluido": "concluido", "erro": "erro"}
+LIMITE_GERACOES_IA_POR_DIA = 5
+
+
+@router.post('/listas/gerar-ia', status_code=202, response_model=GerarListaIAJobResponse)
+def gerar_lista_ia(
+    dados: GerarListaIARequest,
+    background_tasks: BackgroundTasks,
+    usuario_atual=Depends(pegar_usuario_atual),
+):
+    try:
+        id_usuario = str(usuario_atual.id)
+
+        dificuldades_invalidas = [d for d in dados.dificuldades if d not in DIFICULDADE_LABEL]
+        if dificuldades_invalidas:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dificuldade(s) inválida(s): {', '.join(dificuldades_invalidas)}"
+            )
+
+        inicio_do_dia = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        geracoes_hoje = (
+            supabase_admin.table("geracoes_ia_listas")
+            .select("id", count="exact")
+            .eq("usuario_id", id_usuario)
+            .gte("criado_em", inicio_do_dia.isoformat())
+            .execute()
+        )
+        if (geracoes_hoje.count or 0) >= LIMITE_GERACOES_IA_POR_DIA:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Limite de {LIMITE_GERACOES_IA_POR_DIA} listas geradas por IA por dia atingido. Tente novamente amanhã."
+            )
+
+        materias_linhas = _resolver_ids_por_slug("materias", dados.materias, "Matéria")
+        assuntos_linhas = _resolver_ids_por_slug("topicos", dados.assuntos, "Assunto", coluna_id="topico_id")
+        vestibulares_linhas = _resolver_ids_por_slug("tipos_prova", dados.vestibulares, "Vestibular")
+
+        tipo_prova_id = vestibulares_linhas[0]["id"] if len(vestibulares_linhas) == 1 else None
+
+        resposta_job = (
+            supabase_admin.table("geracoes_ia_listas")
+            .insert({
+                "usuario_id": id_usuario,
+                "status": "gerando",
+                "parametros": dados.model_dump(),
+            })
+            .execute()
+        )
+        if not resposta_job.data:
+            raise HTTPException(status_code=500, detail="Não foi possível iniciar a geração da lista")
+
+        job_id = resposta_job.data[0]["id"]
+
+        background_tasks.add_task(
+            _gerar_lista_ia_em_background,
+            job_id,
+            id_usuario,
+            dados.quantidade,
+            dados.materias,
+            materias_linhas,
+            [a["nome"] for a in assuntos_linhas],
+            dados.dificuldades,
+            [v["nome"] for v in vestibulares_linhas],
+            tipo_prova_id,
+            dados.instrucao,
+        )
+
+        return {"job_id": job_id, "status": "processando"}
 
     except HTTPException:
         raise
 
     except Exception as erro:
-        print(f"Erro ao gerar lista com IA: {erro}")
+        print(f"Erro ao iniciar geração de lista com IA: {erro}")
+        raise HTTPException(status_code=500, detail="Erro ao iniciar geração de lista com IA")
 
-        raise HTTPException(
-            status_code=500,
-            detail="Erro ao gerar lista com IA"
+
+@router.get('/geracoes/{job_id}', response_model=GeracaoIAStatusResponse)
+def obter_status_geracao_ia(job_id: UUID, usuario_atual=Depends(pegar_usuario_atual)):
+    try:
+        id_usuario = str(usuario_atual.id)
+
+        job = (
+            supabase_admin.table("geracoes_ia_listas")
+            .select("id, status, lista_questoes_id, mensagem_erro, usuario_id")
+            .eq("id", str(job_id))
+            .limit(1)
+            .execute()
+            .data
         )
+
+        # 404 tanto pra job inexistente quanto pra job de outro usuário —
+        # não revela pra quem não é dono que aquele id existe.
+        if not job or job[0]["usuario_id"] != id_usuario:
+            raise HTTPException(status_code=404, detail="Geração não encontrada")
+
+        job = job[0]
+        resposta = {
+            "job_id": job["id"],
+            "status": _STATUS_DB_PARA_API.get(job["status"], job["status"]),
+            "lista_id": None,
+            "slug": None,
+            "erro_mensagem": job.get("mensagem_erro"),
+        }
+
+        if job["status"] == "concluido" and job["lista_questoes_id"]:
+            lista = (
+                supabase_admin.table("listas_questoes")
+                .select("id, slug")
+                .eq("id", job["lista_questoes_id"])
+                .limit(1)
+                .execute()
+                .data
+            )
+            if lista:
+                resposta["lista_id"] = lista[0]["id"]
+                resposta["slug"] = lista[0].get("slug")
+
+        return resposta
+
+    except HTTPException:
+        raise
+
+    except Exception as erro:
+        print(f"Erro ao consultar status de geração de lista com IA: {erro}")
+        raise HTTPException(status_code=500, detail="Erro ao consultar status de geração de lista com IA")

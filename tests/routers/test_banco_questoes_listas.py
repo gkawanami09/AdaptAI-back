@@ -137,6 +137,107 @@ def test_lista_concluida_quando_execucao_finalizada():
     assert listas[0]["questoes_corretas"] == 1
 
 
+def test_lista_do_catalogo_nao_e_personalizada():
+    fake = FakeSupabase()
+    _preparar_fake(fake, respostas=[], progresso=[])
+    # _preparar_fake não seta usuario_id (mesmo shape de lista de catálogo).
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        listas = banco_questoes.montar_listas(USUARIO_ID, None, None, None, False, False)
+
+    assert listas[0]["personalizada"] is False
+
+
+def test_lista_personalizada_do_proprio_usuario_aparece_marcada():
+    fake = FakeSupabase()
+    _preparar_fake(fake, respostas=[], progresso=[])
+    fake.table("listas_questoes").execute.return_value = query_result(data=[{
+        "id": LISTA_ID, "slug": "lista-teste", "titulo": "Lista de teste",
+        "descricao": None, "materia_id": MATERIA_ID, "tipo_prova_id": TIPO_PROVA_ID,
+        "dificuldade": "medio", "usuario_id": USUARIO_ID,
+    }])
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        listas = banco_questoes.montar_listas(USUARIO_ID, None, None, None, False, False)
+
+    assert len(listas) == 1
+    assert listas[0]["personalizada"] is True
+
+
+def test_lista_personalizada_de_outro_usuario_nao_aparece():
+    fake = FakeSupabase()
+    _preparar_fake(fake, respostas=[], progresso=[])
+    fake.table("listas_questoes").execute.return_value = query_result(data=[{
+        "id": LISTA_ID, "slug": "lista-teste", "titulo": "Lista de teste",
+        "descricao": None, "materia_id": MATERIA_ID, "tipo_prova_id": TIPO_PROVA_ID,
+        "dificuldade": "medio", "usuario_id": str(uuid4()),
+    }])
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        listas = banco_questoes.montar_listas(USUARIO_ID, None, None, None, False, False)
+
+    assert listas == []
+
+
+def test_excluir_lista_personalizada_propria():
+    fake = FakeSupabase()
+    fake.table("listas_questoes").execute.return_value = query_result(
+        data=[{"id": LISTA_ID, "usuario_id": USUARIO_ID}]
+    )
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        resultado = banco_questoes.excluir_lista_personalizada(
+            lista_id=LISTA_ID, usuario_atual=_UsuarioFake()
+        )
+
+    assert resultado is None
+    fake.table("respostas_lista_questoes_aluno").delete.assert_called_once()
+    fake.table("progresso_lista_questoes_aluno").delete.assert_called_once()
+    fake.table("itens_lista_questoes").delete.assert_called_once()
+    fake.table("listas_questoes").delete.assert_called_once()
+
+
+def test_excluir_lista_do_catalogo_retorna_403():
+    fake = FakeSupabase()
+    fake.table("listas_questoes").execute.return_value = query_result(
+        data=[{"id": LISTA_ID, "usuario_id": None}]
+    )
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        try:
+            banco_questoes.excluir_lista_personalizada(lista_id=LISTA_ID, usuario_atual=_UsuarioFake())
+            assert False, "deveria levantar HTTPException"
+        except Exception as erro:
+            assert getattr(erro, "status_code", None) == 403
+    fake.table("listas_questoes").delete.assert_not_called()
+
+
+def test_excluir_lista_de_outro_usuario_retorna_403():
+    fake = FakeSupabase()
+    fake.table("listas_questoes").execute.return_value = query_result(
+        data=[{"id": LISTA_ID, "usuario_id": str(uuid4())}]
+    )
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        try:
+            banco_questoes.excluir_lista_personalizada(lista_id=LISTA_ID, usuario_atual=_UsuarioFake())
+            assert False, "deveria levantar HTTPException"
+        except Exception as erro:
+            assert getattr(erro, "status_code", None) == 403
+
+
+def test_excluir_lista_inexistente_retorna_404():
+    fake = FakeSupabase()
+    fake.table("listas_questoes").execute.return_value = query_result(data=[])
+
+    with patch("routers.banco_questoes.supabase_admin", fake):
+        try:
+            banco_questoes.excluir_lista_personalizada(lista_id=LISTA_ID, usuario_atual=_UsuarioFake())
+            assert False, "deveria levantar HTTPException"
+        except Exception as erro:
+            assert getattr(erro, "status_code", None) == 404
+
+
 def test_refazer_lista_cria_nova_execucao():
     fake = FakeSupabase()
     fake.table("listas_questoes").execute.return_value = query_result(

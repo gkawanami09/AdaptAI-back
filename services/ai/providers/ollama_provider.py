@@ -9,7 +9,7 @@ from services.ai.prompts.explicacao import montar_prompt_explicacao_erro
 from services.ai.prompts.feedback import SYSTEM_PROMPT as FEEDBACK_SYSTEM_PROMPT
 from services.ai.prompts.feedback import montar_prompt_feedback
 from services.ai.prompts.questoes import SYSTEM_PROMPT as QUESTOES_SYSTEM_PROMPT
-from services.ai.prompts.questoes import montar_prompt_gerar_questoes
+from services.ai.prompts.questoes import montar_prompt_gerar_questoes, estimar_max_tokens_questoes
 from services.ai.schemas.correcao_ia_schema import AvaliacaoArgumentativaIA
 from services.ai.schemas.questoes_geradas_schema import QuestoesGeradasIA
 
@@ -93,8 +93,19 @@ class OllamaProvider(AIProvider):
         ]
         return self.responder_chat(mensagens)
 
-    def gerar_questoes(self, materia: str, topico: str, quantidade: int) -> list[dict]:
-        prompt = montar_prompt_gerar_questoes(materia, topico, quantidade)
+    def gerar_questoes(
+        self,
+        quantidade: int,
+        materias: list[str] | None = None,
+        assuntos: list[str] | None = None,
+        dificuldades: list[str] | None = None,
+        vestibulares: list[str] | None = None,
+        instrucao: str | None = None,
+    ) -> list[dict]:
+        prompt = montar_prompt_gerar_questoes(
+            quantidade, materias, assuntos, dificuldades, vestibulares, instrucao
+        )
+        num_predict = estimar_max_tokens_questoes(quantidade, self._max_tokens)
 
         try:
             resposta = httpx.post(
@@ -107,9 +118,22 @@ class OllamaProvider(AIProvider):
                     ],
                     "format": "json",
                     "stream": False,
+                    # Modelos de "raciocínio" (ex.: qwen3) gastam a maior
+                    # parte do tempo pensando antes de responder, mesmo pra
+                    # tarefas estruturadas como esta em que só o JSON final
+                    # importa — medido ~12x mais lento com thinking ligado
+                    # numa chamada trivial neste ambiente. Sem impacto na
+                    # qualidade do JSON gerado.
+                    "think": False,
                     "options": {
                         "temperature": self._temperature,
-                        "num_predict": self._max_tokens,
+                        "num_predict": num_predict,
+                        # Sem isso o Ollama usa o num_ctx padrão do modelo
+                        # (tipicamente 2048), que já é consumido quase todo
+                        # só pelo prompt + saída de poucas questões — gerar
+                        # um lote maior (ex.: 20 questões) estoura o
+                        # contexto e a resposta vem com JSON cortado no meio.
+                        "num_ctx": max(4096, num_predict + 2000),
                     },
                 },
                 timeout=self._timeout,

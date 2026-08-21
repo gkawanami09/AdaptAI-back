@@ -73,7 +73,7 @@ class TestOllamaProviderExtension:
 
     def test_gerar_questoes_retorna_lista_de_dicts(self):
         with patch("httpx.post", return_value=_mock_response_ollama(QUESTOES_JSON)):
-            resultado = _ollama().gerar_questoes("matematica", "aritmetica", 1)
+            resultado = _ollama().gerar_questoes(1, materias=["matematica"], assuntos=["aritmetica"])
         assert resultado == [
             {
                 "enunciado": "Quanto é 2+2?",
@@ -92,7 +92,7 @@ class TestOllamaProviderExtension:
     def test_gerar_questoes_levanta_erro_quando_indisponivel(self):
         with patch("httpx.post", side_effect=httpx.ConnectError("boom")):
             with pytest.raises(AIIndisponivelError):
-                _ollama().gerar_questoes("matematica", "aritmetica", 1)
+                _ollama().gerar_questoes(1, materias=["matematica"], assuntos=["aritmetica"])
 
 
 class TestOpenAICompatibleProviderExtension:
@@ -110,7 +110,7 @@ class TestOpenAICompatibleProviderExtension:
 
     def test_gerar_questoes_retorna_lista_de_dicts(self):
         with patch("httpx.post", return_value=_mock_response_openai(QUESTOES_JSON)):
-            resultado = _openai_compat().gerar_questoes("matematica", "aritmetica", 1)
+            resultado = _openai_compat().gerar_questoes(1, materias=["matematica"], assuntos=["aritmetica"])
         assert resultado[0]["resposta_correta"] == "4"
 
     def test_explicar_erro_levanta_erro_quando_indisponivel(self):

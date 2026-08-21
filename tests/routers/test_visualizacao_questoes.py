@@ -70,3 +70,41 @@ def test_garantir_progresso_cria_primeira_execucao_quando_nao_existe():
 
     assert progresso["id"] == "execucao-1"
     fake.table("progresso_lista_questoes_aluno").insert.assert_called_once()
+
+
+QUESTAO_ID_2 = str(uuid4())
+EXECUCAO_ID = str(uuid4())
+
+
+def _preparar_fake_finalizar(fake: FakeSupabase, respostas_dadas: list[dict]):
+    fake.table("listas_questoes").execute.return_value = query_result(data=[
+        {"id": LISTA_ID, "usuario_id": USUARIO_ID, "slug": "lista-x", "titulo": "Lista X",
+         "materia_id": None, "tipo_prova_id": None, "dificuldade": None, "tipo_lista": "fixa"},
+    ])
+    fake.table("itens_lista_questoes").execute.return_value = query_result(data=[
+        {"questao_id": QUESTAO_ID, "ordem": 0},
+        {"questao_id": QUESTAO_ID_2, "ordem": 1},
+    ])
+    fake.table("progresso_lista_questoes_aluno").execute.side_effect = [
+        query_result(data=[{"id": EXECUCAO_ID, "status": "em_andamento", "iniciado_em": "2026-01-01T00:00:00+00:00"}]),
+        query_result(data=[{"id": EXECUCAO_ID}]),  # update
+    ]
+    fake.table("respostas_lista_questoes_aluno").execute.return_value = query_result(data=respostas_dadas)
+
+
+def test_finalizar_lista_com_questao_em_branco_nao_bloqueia_mais():
+    """Regressão: finalizar não pode mais exigir 100% respondido — o aluno
+    fecha a lista com questão em branco e ela conta como não respondida
+    no resultado, sem travar a chamada (antes levantava 422)."""
+    fake = FakeSupabase()
+    _preparar_fake_finalizar(fake, respostas_dadas=[{"questao_id": QUESTAO_ID}])  # só 1 de 2 respondida
+
+    with patch("routers.visualizacao_questoes.supabase_admin", fake):
+        resultado = vq.finalizar_lista(slug="lista-x", usuario_atual=_UsuarioFake())
+
+    assert resultado["status"] == "finalizada"
+    assert resultado["questoes_concluidas"] == 1
+    assert resultado["questoes_totais"] == 2
+    fake.table("progresso_lista_questoes_aluno").update.assert_called_once()
+    payload = fake.table("progresso_lista_questoes_aluno").update.call_args[0][0]
+    assert payload["status"] == "finalizada"

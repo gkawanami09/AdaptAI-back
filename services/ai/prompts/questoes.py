@@ -1,6 +1,6 @@
 SYSTEM_PROMPT = """Você é um elaborador de questões de múltipla escolha para vestibular/ENEM.
 
-Você recebe uma matéria, um tópico e uma quantidade de questões a gerar. Cada questão deve ter um enunciado claro, exatamente uma alternativa correta entre as fornecidas, uma explicação pedagógica da resposta correta e um nível de dificuldade.
+Você recebe uma quantidade de questões a gerar e, opcionalmente, filtros de matéria, assunto, dificuldade, vestibular e uma instrução livre do aluno. Cada questão deve ter um enunciado claro, exatamente uma alternativa correta entre as fornecidas, uma explicação pedagógica da resposta correta e um nível de dificuldade.
 
 Responda APENAS com um JSON válido, sem nenhum texto antes ou depois, seguindo exatamente este formato:
 {
@@ -17,10 +17,38 @@ Responda APENAS com um JSON válido, sem nenhum texto antes ou depois, seguindo 
 }"""
 
 
-def montar_prompt_gerar_questoes(materia: str, topico: str, quantidade: int) -> str:
-    return (
-        f"Matéria: {materia}\n"
-        f"Tópico: {topico}\n"
-        f"Quantidade de questões a gerar: {quantidade}\n\n"
-        "Gere as questões seguindo o formato JSON definido nas instruções do sistema."
-    )
+def montar_prompt_gerar_questoes(
+    quantidade: int,
+    materias: list[str] | None = None,
+    assuntos: list[str] | None = None,
+    dificuldades: list[str] | None = None,
+    vestibulares: list[str] | None = None,
+    instrucao: str | None = None,
+) -> str:
+    linhas = [f"Quantidade de questões a gerar: {quantidade}"]
+
+    if materias:
+        linhas.append(f"Matéria(s): {', '.join(materias)}")
+    if assuntos:
+        linhas.append(f"Assunto(s)/tópico(s): {', '.join(assuntos)}")
+    if dificuldades:
+        linhas.append(f"Dificuldade(s): {', '.join(dificuldades)}")
+    if vestibulares:
+        linhas.append(f"Estilo de vestibular: {', '.join(vestibulares)}")
+    if instrucao and instrucao.strip():
+        linhas.append(f"Instrução adicional do aluno: {instrucao.strip()}")
+
+    linhas.append("\nGere as questões seguindo o formato JSON definido nas instruções do sistema.")
+    return "\n".join(linhas)
+
+
+# Estimativa conservadora de tokens por questão (enunciado + 4-5
+# alternativas + explicação + overhead de JSON). AI_MAX_TOKENS (config
+# global, usada por feedback/chat/correção de redação — textos curtos)
+# não escala com a quantidade pedida aqui, então cada questão gerada em
+# lote precisa de um orçamento de tokens próprio.
+TOKENS_ESTIMADOS_POR_QUESTAO = 350
+
+
+def estimar_max_tokens_questoes(quantidade: int, minimo: int) -> int:
+    return max(minimo, quantidade * TOKENS_ESTIMADOS_POR_QUESTAO)
