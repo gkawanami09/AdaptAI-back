@@ -1,0 +1,79 @@
+{
+  "linhas": [
+    {
+      "materia": "Matemática",
+      "topico": "Razão, proporção e regra de três",
+      "ano": 2012,
+      "fonte": "ENEM 2012 (2º dia) — gabarito conferido em descomplica.com.br/gabarito-enem e plataformaassaad.com.br",
+      "verificado": true,
+      "status": "pulada (já existe — mesmo enunciado)"
+    },
+    {
+      "materia": "Biologia",
+      "topico": "Ecologia — conceitos e cadeias alimentares",
+      "ano": 2020,
+      "fonte": "ENEM 2020 Digital (2º dia, questão 102 caderno azul) — gabarito conferido em todamateria.com.br e plataformaassaad.com.br",
+      "verificado": true,
+      "status": "pulada (já existe — mesmo enunciado)"
+    },
+    {
+      "materia": "Português",
+      "topico": "Interpretação de texto",
+      "ano": 2012,
+      "fonte": "ENEM 2012 (2º dia) — gabarito oficial INEP conferido em qconcursos.com, descomplica.com.br/gabarito-enem e resumov.com.br",
+      "verificado": true,
+      "status": "pulada (já existe — mesmo enunciado)"
+    },
+    {
+      "materia": "Química",
+      "topico": "Estequiometria",
+      "ano": 2025,
+      "fonte": "ENEM 2025 (2º dia) — gabarito conferido em descomplica.com.br, plataformaassaad.com.br, poliedroresolve.sistemapoliedro.com.br e aprovatotal.com.br",
+      "verificado": true,
+      "status": "ok"
+    }
+  ],
+  "backup": [
+    {
+      "materia": "Química",
+      "topico": "Estequiometria",
+      "tipoProva": "ENEM",
+      "ano": 2025,
+      "dificuldade": "medio",
+      "enunciado": "O Brasil é o maior produtor mundial de nióbio (massa molar = 93 g/mol), metal utilizado na fabricação de vários tipos de aço: automotivos, estruturais e inoxidáveis. O processo utilizado na produção do nióbio é a redução aluminotérmica de Nb2O5 com excesso de 10% de Al (massa molar = 27 g/mol), em relação à quantidade estequiométrica da reação, representada pela equação química: 3 Nb2O5(s) + 10 Al(s) → 6 Nb(s) + 5 Al2O3(s). Uma engenheira metalúrgica estimou a massa de alumínio necessária para produzir 9,3 kg de nióbio, nas condições descritas, para a produção de um lote de peças de aço encomendado por uma indústria, considerando um rendimento de 100%. (Disponível em: www.cbmm.com.br. Acesso em: 17 out. 2015, adaptado). A massa de alumínio, em quilograma, estimada pela engenheira é mais próxima de:",
+      "dica": "Primeiro calcule a massa estequiométrica de Al usando a proporção molar da equação balanceada (10 mol Al : 6 mol Nb). Depois, some o excesso de 10% pedido no enunciado.",
+      "explicacao": "Pela proporção da equação (10 mol Al para 6 mol Nb), a massa estequiométrica de alumínio necessária para 9,3 kg de nióbio é 4,5 kg. Como o processo usa um excesso de 10% de Al, a massa total é 4,5 kg × 1,10 = 4,95 kg, valor mais próximo de 5,0 kg.",
+      "alternativas": [
+        {
+          "letra": "A",
+          "texto": "2,7 kg",
+          "correta": false
+        },
+        {
+          "letra": "B",
+          "texto": "3,0 kg",
+          "correta": false
+        },
+        {
+          "letra": "C",
+          "texto": "4,1 kg",
+          "correta": false
+        },
+        {
+          "letra": "D",
+          "texto": "4,5 kg",
+          "correta": false
+        },
+        {
+          "letra": "E",
+          "texto": "5,0 kg",
+          "correta": true
+        }
+      ],
+      "fonte": "ENEM 2025 (2º dia) — gabarito conferido em descomplica.com.br, plataformaassaad.com.br, poliedroresolve.sistemapoliedro.com.br e aprovatotal.com.br",
+      "verificado": true,
+      "materia_id": "451871f9-31be-487e-b64c-c01171ee91ea",
+      "topico_id": "97af4c8d-e6c8-4dc3-aa15-c5ec644df303"
+    }
+  ]
+}
