@@ -44,17 +44,20 @@ class GerarListaIARequest(BaseModel):
     (ex.: sem `materias`, cai no comportamento antigo de usar a matéria com
     mais erros do aluno).
 
-    Os limites abaixo (10 questões, 5 itens por filtro) vêm de medição real
-    com o modelo em produção (qwen2.5:1.5b, ~80 tokens/s gerados): 10
-    questões giram em ~35-55s; passar disso facilmente estoura 1 minuto
-    de resposta. Não é limite de custo/negócio, é orçamento de tempo."""
+    Limites vêm de medição real com o modelo em produção (qwen2.5:1.5b,
+    ~80 tokens/s gerados, think:false): 5 questões de 1 matéria giram em
+    ~8-10s; 10 questões já passavam de 20-50s dependendo do assunto,
+    ocasionalmente estourando o orçamento de tokens no meio de uma
+    explicação verbosa. Não é limite de custo/negócio, é orçamento de
+    tempo — reduzido especificamente pra manter a resposta rápida no
+    hardware do servidor."""
 
-    quantidade: int = Field(ge=1, le=10)
-    materias: list[str] = Field(default_factory=list, max_length=5)
-    assuntos: list[str] = Field(default_factory=list, max_length=5)
-    dificuldades: list[str] = Field(default_factory=list, max_length=5)
-    vestibulares: list[str] = Field(default_factory=list, max_length=5)
-    instrucao: Optional[str] = None
+    quantidade: int = Field(ge=1, le=5)
+    materias: list[str] = Field(default_factory=list, max_length=3)
+    assuntos: list[str] = Field(default_factory=list, max_length=3)
+    dificuldades: list[str] = Field(default_factory=list, max_length=3)
+    vestibulares: list[str] = Field(default_factory=list, max_length=3)
+    instrucao: Optional[str] = Field(default=None, max_length=300)
 
 
 class GerarListaIAJobResponse(BaseModel):
