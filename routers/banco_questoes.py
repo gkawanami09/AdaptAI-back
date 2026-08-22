@@ -1136,7 +1136,7 @@ def _gerar_lista_ia_em_background(
 
 
 _STATUS_DB_PARA_API = {"gerando": "processando", "concluido": "concluido", "erro": "erro"}
-LIMITE_GERACOES_IA_POR_DIA = 5
+LIMITE_GERACOES_IA_POR_DIA = 1000
 
 
 @router.post('/listas/gerar-ia', status_code=202, response_model=GerarListaIAJobResponse)
