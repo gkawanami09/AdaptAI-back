@@ -42,13 +42,18 @@ class GerarListaIARequest(BaseModel):
     """Filtros opcionais pra geração de lista por IA. Só `quantidade` é
     obrigatório — os demais, quando omitidos, deixam a IA/o backend decidir
     (ex.: sem `materias`, cai no comportamento antigo de usar a matéria com
-    mais erros do aluno)."""
+    mais erros do aluno).
 
-    quantidade: int = Field(ge=1, le=20)
-    materias: list[str] = Field(default_factory=list)
-    assuntos: list[str] = Field(default_factory=list)
-    dificuldades: list[str] = Field(default_factory=list)
-    vestibulares: list[str] = Field(default_factory=list)
+    Os limites abaixo (10 questões, 5 itens por filtro) vêm de medição real
+    com o modelo em produção (qwen2.5:1.5b, ~80 tokens/s gerados): 10
+    questões giram em ~35-55s; passar disso facilmente estoura 1 minuto
+    de resposta. Não é limite de custo/negócio, é orçamento de tempo."""
+
+    quantidade: int = Field(ge=1, le=10)
+    materias: list[str] = Field(default_factory=list, max_length=5)
+    assuntos: list[str] = Field(default_factory=list, max_length=5)
+    dificuldades: list[str] = Field(default_factory=list, max_length=5)
+    vestibulares: list[str] = Field(default_factory=list, max_length=5)
     instrucao: Optional[str] = None
 
 

@@ -47,7 +47,13 @@ def montar_prompt_gerar_questoes(
 # global, usada por feedback/chat/correção de redação — textos curtos)
 # não escala com a quantidade pedida aqui, então cada questão gerada em
 # lote precisa de um orçamento de tokens próprio.
-TOKENS_ESTIMADOS_POR_QUESTAO = 350
+#
+# Medido com qwen2.5:1.5b (modelo em uso no servidor, think:false): o
+# consumo real por questão varia bastante com a temperatura (~150 a
+# ~350+ tokens/questão em runs distintos do mesmo pedido). 350 já foi
+# curto o suficiente pra truncar o JSON num teste real de 10 questões
+# de 1 matéria só; 400 dá folga sem inflar demais o tempo de resposta.
+TOKENS_ESTIMADOS_POR_QUESTAO = 400
 
 
 def estimar_max_tokens_questoes(quantidade: int, minimo: int) -> int:
