@@ -9,7 +9,8 @@ RUN addgroup --system app && adduser --system --ingroup app app
 
 COPY requirements.txt requirements.prod.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.prod.txt
+    pip install --no-cache-dir -r requirements.prod.txt && \
+    python -m spacy download pt_core_news_md
 
 COPY --chown=app:app . .
 RUN mkdir -p /data && chown app:app /data
